@@ -1,0 +1,122 @@
+[
+  {
+    "dh": 24,
+    "dw": 24,
+    "h": 64,
+    "input": "gradient_64.bin",
+    "mode": "bicubic",
+    "premul": false,
+    "ref": "gradient_bicubic_straight_24x24.bin",
+    "w": 64
+  },
+  {
+    "dh": 100,
+    "dw": 100,
+    "h": 64,
+    "input": "gradient_64.bin",
+    "mode": "bicubic",
+    "premul": false,
+    "ref": "gradient_bicubic_straight_100x100.bin",
+    "w": 64
+  },
+  {
+    "dh": 24,
+    "dw": 24,
+    "h": 64,
+    "input": "gradient_64.bin",
+    "mode": "lanczos",
+    "premul": false,
+    "ref": "gradient_lanczos_straight_24x24.bin",
+    "w": 64
+  },
+  {
+    "dh": 100,
+    "dw": 100,
+    "h": 64,
+    "input": "gradient_64.bin",
+    "mode": "lanczos",
+    "premul": false,
+    "ref": "gradient_lanczos_straight_100x100.bin",
+    "w": 64
+  },
+  {
+    "dh": 24,
+    "dw": 24,
+    "h": 64,
+    "input": "checker_64.bin",
+    "mode": "bicubic",
+    "premul": false,
+    "ref": "checker_bicubic_straight_24x24.bin",
+    "w": 64
+  },
+  {
+    "dh": 100,
+    "dw": 100,
+    "h": 64,
+    "input": "checker_64.bin",
+    "mode": "bicubic",
+    "premul": false,
+    "ref": "checker_bicubic_straight_100x100.bin",
+    "w": 64
+  },
+  {
+    "dh": 24,
+    "dw": 24,
+    "h": 64,
+    "input": "checker_64.bin",
+    "mode": "lanczos",
+    "premul": false,
+    "ref": "checker_lanczos_straight_24x24.bin",
+    "w": 64
+  },
+  {
+    "dh": 100,
+    "dw": 100,
+    "h": 64,
+    "input": "checker_64.bin",
+    "mode": "lanczos",
+    "premul": false,
+    "ref": "checker_lanczos_straight_100x100.bin",
+    "w": 64
+  },
+  {
+    "dh": 24,
+    "dw": 24,
+    "h": 64,
+    "input": "disk_64.bin",
+    "mode": "bicubic",
+    "premul": true,
+    "ref": "disk_bicubic_premul_24x24.bin",
+    "w": 64
+  },
+  {
+    "dh": 100,
+    "dw": 100,
+    "h": 64,
+    "input": "disk_64.bin",
+    "mode": "bicubic",
+    "premul": true,
+    "ref": "disk_bicubic_premul_100x100.bin",
+    "w": 64
+  },
+  {
+    "dh": 24,
+    "dw": 24,
+    "h": 64,
+    "input": "disk_64.bin",
+    "mode": "lanczos",
+    "premul": true,
+    "ref": "disk_lanczos_premul_24x24.bin",
+    "w": 64
+  },
+  {
+    "dh": 100,
+    "dw": 100,
+    "h": 64,
+    "input": "disk_64.bin",
+    "mode": "lanczos",
+    "premul": true,
+    "ref": "disk_lanczos_premul_100x100.bin",
+    "w": 64
+  }
+]

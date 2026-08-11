@@ -29,7 +29,10 @@ rasterization — each usable on its own, with no third-party dependencies.
 
 ## Status
 
-Bootstrapping. First landing package: `resample`.
+First landing: **`raster`** (pixel substrate), **`color`** (premultiplied
+alpha), and **`resample`** (nearest, bilinear, box/area, bicubic, Lanczos —
+each with a premultiplied-alpha variant). Pure-Go, CGO=0, 100% covered, six-arch
+CI, numeric parity with Pillow. See [docs/perf.md](docs/perf.md).
 
 ## License
 
