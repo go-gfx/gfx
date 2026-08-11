@@ -11,6 +11,22 @@ permissions:
 
 # Track the latest stable Go (org convention). go.mod floor is 1.26.4.
 jobs:
+  # Every file must be gofmt-clean.
+  gofmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-clean:"; echo "$unformatted"
+            exit 1
+          fi
+
   # Build, vet, race-test, and enforce 100% statement coverage on three OSes.
   test:
     name: test (${{ matrix.os }})
