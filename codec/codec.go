@@ -69,6 +69,8 @@ const (
 	BMP
 	ICO
 	ICNS
+	PNM // Netpbm: PBM/PGM/PPM, ASCII (P1–P3) and binary (P4–P6)
+	QOI // Quite OK Image
 )
 
 // String returns the format's short uppercase name (e.g. "PNG"), or "unknown".
@@ -90,6 +92,10 @@ func (f Format) String() string {
 		return "ICO"
 	case ICNS:
 		return "ICNS"
+	case PNM:
+		return "PNM"
+	case QOI:
+		return "QOI"
 	default:
 		return "unknown"
 	}
@@ -120,6 +126,10 @@ func Sniff(data []byte) Format {
 		return ICO
 	case len(data) >= 4 && string(data[:4]) == "icns":
 		return ICNS
+	case len(data) >= 4 && string(data[:4]) == "qoif":
+		return QOI
+	case len(data) >= 2 && data[0] == 'P' && data[1] >= '1' && data[1] <= '6':
+		return PNM
 	default:
 		return Unknown
 	}
@@ -158,6 +168,10 @@ func DecodeBest(data []byte, targetSize int) (*raster.Image, error) {
 		return decodeICO(data, targetSize)
 	case ICNS:
 		return decodeICNS(data, targetSize)
+	case PNM:
+		return decodePNM(data)
+	case QOI:
+		return decodeQOI(data)
 	default:
 		return nil, ErrUnknownFormat
 	}
