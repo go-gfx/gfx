@@ -68,3 +68,57 @@ z/vector** ship the axpy kernel (`asmgen/`), validated bit-for-bit against the
 scalar oracle in `resample_test.go`; **loong64 / ppc64le / riscv64** keep the
 scalar inner loop plus multicore tiling. The numbers above are the arm64 (NEON)
 path.
+
+---
+
+# Performance — `go-gfx/gfx/vector`
+
+> **The bar here is different:** `vector` was **extracted verbatim** from
+> go-widgets/painter's hand-rolled rasterizer — the same functions, moved, not
+> rewritten. So the target is not "faster", it is **"identical, and no slower"**:
+> the coverage output is proven byte-for-byte equal to the pre-extraction code
+> (`parity_test.go`, 754 shape/rule/width/clamp combinations), and the per-op
+> cost must not regress.
+
+## Method
+
+- **Hardware:** Apple Silicon (arm64), macOS, 16 logical CPUs.
+- **Go 1.26.4**, `go test ./vector/ -bench . -benchmem -run '^$'`.
+- The benchmarks mirror painter's `FillPath` / `StrokePath` benchmarks (same
+  shapes, same 512×512 surface) but time only the **coverage stage** this
+  package owns — a `Rasterizer.Fill` / `Stroke` producing the coverage grid.
+  The consumer's composite (blend into a pixel buffer under a clip) stays in
+  painter and is timed there.
+
+## Coverage-stage results (arm64, one reused `Rasterizer`)
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|--:|--:|--:|
+| `FillCircleNonZero`  (r=240 cubic circle) | 705,710 | 17,424 | 17 |
+| `FillPolygonNonZero` (256-gon)            | 859,953 | 25,822 | 18 |
+| `FillStarNonZero`    (8-point star)       | 293,595 |  1,937 | 10 |
+| `FillStarEvenOdd`    (8-point star)       | 293,527 |  1,951 | 10 |
+| `StrokePolyline`     (64-vertex, w=6)     | 613,298 | 15,483 | 78 |
+| `StrokeCircle`       (r=200, w=4)         | 137,153 | 35,170 | 146 |
+
+## Reading the numbers — no regression, by construction
+
+- The **coverage accumulator, per-segment temporary, and scanline crossings
+  buffer are reused** across calls (`Rasterizer` scratch), so a steady stream of
+  draws allocates none of them after warm-up — exactly the amortisation the
+  pre-extraction painter had (its scratch lived on the `PixelPainter`).
+- The residual allocations above are the **path flattening** (`flatten` →
+  contours), the **edge list**, and the stroke's per-segment `segs` / `verts` /
+  rectangle slices. These were allocated per call in the original painter too;
+  the extraction moved that code unchanged, so the allocation profile is the
+  same shape it always was.
+- There is **no SIMD / go-asmgen path** in this rasterizer (unlike `resample`):
+  it is scalar `float64` scanline coverage plus integer box arithmetic. Nothing
+  arch-specific was added or removed by the extraction; the six-arch CI runs the
+  identical code everywhere.
+- The **authoritative end-to-end no-regression check** is in the consumer:
+  go-widgets/painter carries the full `FillPath` / `StrokePath` benchmarks
+  (coverage **+** composite) and a `benchstat` of the migration (before = its
+  own inline rasterizer, after = this package) — see that repo's
+  `docs/perf.md`. painter's `StrokePath` was 17–220× over a naïve per-pixel
+  baseline; the extraction keeps every fast path, so that stands.
