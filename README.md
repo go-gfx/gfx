@@ -18,7 +18,7 @@ rasterization — each usable on its own, with no third-party dependencies.
 | `raster`   | shared pixel-buffer / pixel-format substrate |
 | `resample` | high-quality resizing: box/area, bicubic (Catmull-Rom), Lanczos |
 | `codec`    | image decoders/encoders: png, jpeg, webp, ico, icns, gif, tiff |
-| `vector`   | paths, anti-aliased rasterizer, strokes, gradients |
+| `vector`   | paths, anti-aliased fill/stroke rasterizer (round joins & caps, non-zero / even-odd) |
 
 ## Consumers
 
@@ -29,10 +29,12 @@ rasterization — each usable on its own, with no third-party dependencies.
 
 ## Status
 
-First landing: **`raster`** (pixel substrate), **`color`** (premultiplied
-alpha), and **`resample`** (nearest, bilinear, box/area, bicubic, Lanczos —
-each with a premultiplied-alpha variant). Pure-Go, CGO=0, 100% covered, six-arch
-CI, numeric parity with Pillow. See [docs/perf.md](docs/perf.md).
+Landed: **`raster`** (pixel substrate), **`color`** (premultiplied
+alpha), **`resample`** (nearest, bilinear, box/area, bicubic, Lanczos —
+each with a premultiplied-alpha variant), and **`vector`** (2-D path
+builder + anti-aliased scanline fill/stroke rasterizer, extracted verbatim from
+go-widgets/painter and proven pixel-identical to it). Pure-Go, CGO=0, 100%
+covered, six-arch CI, numeric parity with Pillow. See [docs/perf.md](docs/perf.md).
 
 ## License
 
