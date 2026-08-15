@@ -47,7 +47,7 @@ func TestSRGBTransfer(t *testing.T) {
 // trips.
 func TestXYZMatrix(t *testing.T) {
 	w := LinearRGBToXYZ(1, 1, 1)
-	if !approx(w.X, d65Xn, 1e-4) || !approx(w.Y, d65Yn, 1e-4) || !approx(w.Z, d65Zn, 1e-4) {
+	if !approx(w.X, D65.X, 1e-4) || !approx(w.Y, D65.Y, 1e-4) || !approx(w.Z, D65.Z, 1e-4) {
 		t.Fatalf("white XYZ = %+v, want D65", w)
 	}
 	r, g, b := XYZToLinearRGB(LinearRGBToXYZ(0.3, 0.6, 0.9))

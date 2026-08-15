@@ -43,13 +43,8 @@ type XYZ struct{ X, Y, Z float64 }
 // axis.
 type Lab struct{ L, A, B float64 }
 
-// D65 reference white in CIE XYZ (2-degree observer), the white point sRGB is
-// defined against.
-var (
-	d65Xn = 0.95047
-	d65Yn = 1.0
-	d65Zn = 1.08883
-)
+// The D65 reference white sRGB is defined against lives in [D65]
+// (whitepoint.go); the Lab conversions below default to it.
 
 // LinearRGBToXYZ converts linear-light sRGB primaries (each 0..1) to CIE XYZ
 // using the standard sRGB D65 matrix.
@@ -91,11 +86,11 @@ func labFInv(t float64) float64 {
 	return 3 * labDelta * labDelta * (t - 4.0/29.0)
 }
 
-// XYZToLab converts CIE XYZ (D65) to CIE L*a*b*.
-func XYZToLab(c XYZ) Lab {
-	fx := labF(c.X / d65Xn)
-	fy := labF(c.Y / d65Yn)
-	fz := labF(c.Z / d65Zn)
+// XYZToLabWP converts CIE XYZ to CIE L*a*b* relative to the white point wp.
+func XYZToLabWP(c XYZ, wp WhitePoint) Lab {
+	fx := labF(c.X / wp.X)
+	fy := labF(c.Y / wp.Y)
+	fz := labF(c.Z / wp.Z)
 	return Lab{
 		L: 116*fy - 16,
 		A: 500 * (fx - fy),
@@ -103,18 +98,25 @@ func XYZToLab(c XYZ) Lab {
 	}
 }
 
-// LabToXYZ converts CIE L*a*b* back to CIE XYZ (D65), the inverse of
-// [XYZToLab].
-func LabToXYZ(l Lab) XYZ {
+// LabToXYZWP converts CIE L*a*b* back to CIE XYZ relative to the white point wp,
+// the inverse of [XYZToLabWP].
+func LabToXYZWP(l Lab, wp WhitePoint) XYZ {
 	fy := (l.L + 16) / 116
 	fx := fy + l.A/500
 	fz := fy - l.B/200
 	return XYZ{
-		X: d65Xn * labFInv(fx),
-		Y: d65Yn * labFInv(fy),
-		Z: d65Zn * labFInv(fz),
+		X: wp.X * labFInv(fx),
+		Y: wp.Y * labFInv(fy),
+		Z: wp.Z * labFInv(fz),
 	}
 }
+
+// XYZToLab converts CIE XYZ (D65) to CIE L*a*b*.
+func XYZToLab(c XYZ) Lab { return XYZToLabWP(c, D65) }
+
+// LabToXYZ converts CIE L*a*b* back to CIE XYZ (D65), the inverse of
+// [XYZToLab].
+func LabToXYZ(l Lab) XYZ { return LabToXYZWP(l, D65) }
 
 // SRGBToLab converts an sRGB colour (each channel 0..1, gamma-encoded) to CIE
 // L*a*b*, chaining sRGB->linear->XYZ->Lab.
