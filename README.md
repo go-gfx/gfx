@@ -14,7 +14,7 @@ rasterization — each usable on its own, with no third-party dependencies.
 | Package | Purpose |
 |---|---|
 | `geometry` | points, rectangles, affine transforms |
-| `color`    | RGB/Lab/XYZ, sRGB↔linear, premultiplied alpha, blend modes |
+| `color`    | full colour science: HSV/HSL/HWB, XYZ/Lab/LCh/Luv/OKLab/OKLCH, Y′CbCr, CMYK, D65↔D50 Bradford, ΔE (76/94/2000/OK), separable + non-separable blends, premultiplied alpha |
 | `raster`   | shared pixel-buffer / pixel-format substrate |
 | `resample` | high-quality resizing: box/area, bicubic (Catmull-Rom), Lanczos |
 | `codec`    | image decoders/encoders: png, jpeg, webp, ico, icns, gif, tiff |
@@ -31,9 +31,15 @@ rasterization — each usable on its own, with no third-party dependencies.
 
 Landed: **`geometry`** (float64 point / axis-aligned rect / 2-D affine matrix —
 translate, scale, rotate, shear, compose, invert, transform point & rect),
-**`raster`** (pixel substrate), **`color`** (premultiplied alpha, the sRGB
-transfer function, linear-RGB↔CIE XYZ↔CIE L\*a\*b\*, and the W3C separable blend
-modes), **`resample`** (nearest, bilinear, box/area, bicubic, Lanczos — each with
+**`raster`** (pixel substrate), **`color`** (a complete colour-science layer: premultiplied
+alpha; the sRGB and generic-gamma transfer functions; the cylindrical sRGB models
+HSV/HSL/HWB; the CIE hub XYZ with D65 **and** D50 white points and Bradford
+D65↔D50 adaptation; CIE L\*a\*b\*/LCh, L\*u\*v\*/LCh(uv), Ottosson OKLab/OKLCH;
+Y′CbCr BT.601/709 and naive CMYK; the ΔE colour-difference metrics ΔE76, ΔE94,
+CIEDE2000 and ΔE-OK; the W3C separable **and** non-separable blend modes; and a
+second, scikit-image-byte-compatible sRGB↔XYZ↔Lab regime so go-images can share
+one colour library — all numerically checked against the colour-science oracle
+and the published CIE / W3C / Sharma reference values), **`resample`** (nearest, bilinear, box/area, bicubic, Lanczos — each with
 a premultiplied-alpha variant), and **`vector`** (2-D path builder +
 anti-aliased scanline fill/stroke rasterizer, extracted verbatim from
 go-widgets/painter and proven pixel-identical to it, now with linear/radial
