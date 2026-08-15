@@ -27,6 +27,42 @@ type HSL struct{ H, S, L float64 }
 // is in degrees [0, 360); W and B are in [0, 1].
 type HWB struct{ H, W, B float64 }
 
+// absf returns the absolute value of x. It is a small, inlinable stand-in for
+// math.Abs on the hot cylindrical-colour paths: math.Abs is not inlined, so a
+// per-pixel caller pays a call for it, while this folds into the caller. The
+// two agree bit-for-bit on every finite input (the only difference is the sign
+// of a zero result, which none of these callers observes).
+func absf(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// minMax3 returns the minimum and maximum of three values using plain
+// comparisons. It replaces the nested math.Min/math.Max calls the cylindrical
+// conversions used to make: those functions carry IEEE NaN/signed-zero handling
+// that is both slower and not inlinable, whereas for the finite channel values
+// these callers pass the plain comparison yields the identical float and folds
+// into the caller. Keeping it here means every sRGB->HS* conversion (and every
+// fleet consumer of them) gets the faster path at once.
+func minMax3(a, b, c float64) (mn, mx float64) {
+	mn, mx = a, a
+	if b < mn {
+		mn = b
+	}
+	if b > mx {
+		mx = b
+	}
+	if c < mn {
+		mn = c
+	}
+	if c > mx {
+		mx = c
+	}
+	return mn, mx
+}
+
 // hueOf returns the CSS hue in degrees [0, 360) for gamma sRGB (r, g, b), given
 // the channel maximum mx and range d = mx - min. For an achromatic colour
 // (d == 0) the hue is 0.
@@ -37,7 +73,10 @@ func hueOf(r, g, b, mx, d float64) float64 {
 	var h float64
 	switch mx {
 	case r:
-		h = math.Mod((g-b)/d, 6)
+		// (g-b)/d lies in [-1, 1] when r is the maximum, so the modulo-6 wrap the
+		// other CSS formulations apply here is a no-op; dropping it keeps the value
+		// bit-identical while making the function small enough to inline.
+		h = (g - b) / d
 	case g:
 		h = (b-r)/d + 2
 	default: // mx == b
@@ -52,8 +91,7 @@ func hueOf(r, g, b, mx, d float64) float64 {
 
 // SRGBToHSV converts a gamma-encoded sRGB colour (each channel 0..1) to HSV.
 func SRGBToHSV(r, g, b float64) HSV {
-	mx := math.Max(r, math.Max(g, b))
-	mn := math.Min(r, math.Min(g, b))
+	mn, mx := minMax3(r, g, b)
 	d := mx - mn
 	s := 0.0
 	if mx != 0 {
@@ -66,8 +104,13 @@ func SRGBToHSV(r, g, b float64) HSV {
 // value m (the minimum channel), the shared core of the HSV/HSL/HWB inverses.
 func hueToRGB(h, c, m float64) (r, g, b float64) {
 	hp := NormalizeHue(h) / 60
-	x := c * (1 - math.Abs(math.Mod(hp, 2)-1))
-	switch int(hp) {
+	seg := int(hp)
+	// math.Mod(hp, 2) computed without the (non-inlinable) call: it equals
+	// hp - 2*floor(hp/2), and for the hp in [0, 6) this receives 2*floor(hp/2) is
+	// simply seg with its low bit cleared. Exact on these inputs, and it lets the
+	// whole function inline into a per-pixel caller.
+	x := c * (1 - absf(hp-float64(seg&^1)-1))
+	switch seg {
 	case 0:
 		r, g, b = c, x, 0
 	case 1:
@@ -93,13 +136,12 @@ func HSVToSRGB(h HSV) (r, g, b float64) {
 
 // SRGBToHSL converts a gamma-encoded sRGB colour (each channel 0..1) to HSL.
 func SRGBToHSL(r, g, b float64) HSL {
-	mx := math.Max(r, math.Max(g, b))
-	mn := math.Min(r, math.Min(g, b))
+	mn, mx := minMax3(r, g, b)
 	d := mx - mn
 	l := (mx + mn) / 2
 	s := 0.0
 	if d != 0 {
-		s = d / (1 - math.Abs(2*l-1))
+		s = d / (1 - absf(2*l-1))
 	}
 	return HSL{H: hueOf(r, g, b, mx, d), S: s, L: l}
 }
@@ -107,14 +149,13 @@ func SRGBToHSL(r, g, b float64) HSL {
 // HSLToSRGB converts an HSL colour back to gamma-encoded sRGB, the inverse of
 // [SRGBToHSL].
 func HSLToSRGB(h HSL) (r, g, b float64) {
-	c := (1 - math.Abs(2*h.L-1)) * h.S
+	c := (1 - absf(2*h.L-1)) * h.S
 	return hueToRGB(h.H, c, h.L-c/2)
 }
 
 // SRGBToHWB converts a gamma-encoded sRGB colour (each channel 0..1) to HWB.
 func SRGBToHWB(r, g, b float64) HWB {
-	mx := math.Max(r, math.Max(g, b))
-	mn := math.Min(r, math.Min(g, b))
+	mn, mx := minMax3(r, g, b)
 	return HWB{H: hueOf(r, g, b, mx, mx-mn), W: mn, B: 1 - mx}
 }
 
