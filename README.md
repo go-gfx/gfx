@@ -18,7 +18,7 @@ rasterization — each usable on its own, with no third-party dependencies.
 | `raster`   | shared pixel-buffer / pixel-format substrate |
 | `resample` | high-quality resizing: box/area, bicubic (Catmull-Rom), Lanczos |
 | `codec`    | image decoders/encoders: png, jpeg, webp, ico, icns, gif, tiff |
-| `vector`   | paths, anti-aliased fill/stroke rasterizer (round joins & caps, non-zero / even-odd) |
+| `vector`   | paths, anti-aliased fill/stroke rasterizer (round joins & caps, non-zero / even-odd), linear/radial gradients, source-over compositing |
 
 ## Consumers
 
@@ -29,12 +29,18 @@ rasterization — each usable on its own, with no third-party dependencies.
 
 ## Status
 
-Landed: **`raster`** (pixel substrate), **`color`** (premultiplied
-alpha), **`resample`** (nearest, bilinear, box/area, bicubic, Lanczos —
-each with a premultiplied-alpha variant), and **`vector`** (2-D path
-builder + anti-aliased scanline fill/stroke rasterizer, extracted verbatim from
-go-widgets/painter and proven pixel-identical to it). Pure-Go, CGO=0, 100%
-covered, six-arch CI, numeric parity with Pillow. See [docs/perf.md](docs/perf.md).
+Landed: **`geometry`** (float64 point / axis-aligned rect / 2-D affine matrix —
+translate, scale, rotate, shear, compose, invert, transform point & rect),
+**`raster`** (pixel substrate), **`color`** (premultiplied alpha, the sRGB
+transfer function, linear-RGB↔CIE XYZ↔CIE L\*a\*b\*, and the W3C separable blend
+modes), **`resample`** (nearest, bilinear, box/area, bicubic, Lanczos — each with
+a premultiplied-alpha variant), and **`vector`** (2-D path builder +
+anti-aliased scanline fill/stroke rasterizer, extracted verbatim from
+go-widgets/painter and proven pixel-identical to it, now with linear/radial
+gradients and source-over compositing of any paint through a coverage grid).
+Colour-science and blend results match the published CIE / W3C reference values.
+Pure-Go, CGO=0, 100% covered, six-arch CI, numeric parity with Pillow. See
+[docs/perf.md](docs/perf.md).
 
 ## License
 
