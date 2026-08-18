@@ -19,6 +19,7 @@ rasterization — each usable on its own, with no third-party dependencies.
 | `resample` | high-quality resizing: box/area, bicubic (Catmull-Rom), Lanczos |
 | `codec`    | image decoders/encoders: png, jpeg, webp, ico, icns, gif, tiff |
 | `vector`   | paths, anti-aliased fill/stroke rasterizer (round joins & caps, non-zero / even-odd), linear/radial gradients, source-over compositing |
+| `iso`      | isometric projection (project / unproject / depth-sort) and shaded pixel primitives — cube, brick, pyramid, slope, line, side — composited into a depth-ordered scene (the pure-Go obelisk.js) |
 
 ## Consumers
 
