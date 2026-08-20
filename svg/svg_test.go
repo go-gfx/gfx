@@ -627,19 +627,19 @@ func TestParseFloatsSkipsBad(t *testing.T) {
 }
 
 func TestResolveFillAndHex(t *testing.T) {
-	if _, paint := resolveFill("none", black, true, black, white); paint {
+	if _, paint, _ := resolveFill("none", black, true, black, white); paint {
 		t.Error("none should not paint")
 	}
-	if c, _ := resolveFill("black", black, true, red, white); c != red {
+	if c, _, _ := resolveFill("black", black, true, red, white); c != red {
 		t.Error("black should map to ink")
 	}
-	if c, _ := resolveFill("white", black, true, red, white); c != white {
+	if c, _, _ := resolveFill("white", black, true, red, white); c != white {
 		t.Error("white should map to paper")
 	}
-	if c, _ := resolveFill("", red, true, black, white); c != red {
+	if c, _, _ := resolveFill("", red, true, black, white); c != red {
 		t.Error("empty should inherit")
 	}
-	if c, _ := resolveFill("#abc", black, true, black, white); c != (color.RGBA{0xaa, 0xbb, 0xcc, 255}) {
+	if c, _, _ := resolveFill("#abc", black, true, black, white); c != (color.RGBA{0xaa, 0xbb, 0xcc, 255}) {
 		t.Errorf("#abc wrong: %v", c)
 	}
 

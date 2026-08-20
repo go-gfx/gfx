@@ -13,9 +13,22 @@
 // transforms and fills, <path> outlines (commands M/L/H/V/C/S/Q/T/Z, absolute
 // and relative; arcs are unsupported and cause the path to be skipped), <rect>,
 // <circle>, nested <svg> islands with their own viewBox, and embedded raster
-// <image> data URIs. Fills resolve black/white/currentColor/none plus #rgb and
-// #rrggbb literals, with an optional ink recolour and a transparent-or-opaque
-// paper background. Malformed shapes are skipped rather than failing the page.
+// <image> data URIs.
+//
+// Fills and STROKES resolve black/white/currentColor/none, #rgb and #rrggbb
+// literals, and url(#id) references to a <linearGradient> or <radialGradient> —
+// in objectBoundingBox units (the SVG default, placed across the filled shape's
+// own box) or userSpaceOnUse. A stroke honours stroke-width, carried through the
+// transform as the length it is; caps and joins are round. <rect> honours rx/ry.
+// An ink recolour and a transparent-or-opaque paper background are available.
+//
+// A value this subset does not implement leaves the shape UNPAINTED rather than
+// inheriting: silently flooding it with the ancestor's colour is what rendered
+// every gradient-filled document as a flat square. Malformed shapes are skipped
+// rather than failing the page.
+//
+// Text is NOT rendered: <text> needs a font, which this package deliberately does
+// not depend on.
 //
 // Every <g> element is reported in [Result.Groups] together with the
 // device-pixel bounding box of everything it drew. That is the generic seam a
@@ -35,6 +48,7 @@ import (
 	_ "image/jpeg" // register JPEG decoder for embedded images
 	_ "image/png"  // register PNG decoder for embedded images
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/go-gfx/gfx/raster"
@@ -104,11 +118,16 @@ var errNoSVG = errors.New("svg: no parseable <svg> root")
 
 // state is the inherited rendering context flowing down the element tree.
 type state struct {
-	m        matrix     // composed user->device transform
-	fill     color.RGBA // resolved current fill colour
-	paint    bool       // whether the current fill paints anything
-	groups   []int      // indices into renderer.groups of the enclosing <g> ancestors
-	vpW, vpH float64    // current viewport size, for percentage lengths
+	m         matrix     // composed user->device transform
+	fill      color.RGBA // resolved current fill colour
+	paint     bool       // whether the current fill paints anything
+	fillRef   string     // id of the paint server filling the shape, "" for a plain colour
+	stroke    color.RGBA // resolved current stroke colour
+	strokeOn  bool       // whether the outline is drawn
+	strokeRef string     // id of the paint server stroking the shape
+	strokeW   float64    // stroke width in USER units; scaled by m at paint time
+	groups    []int      // indices into renderer.groups of the enclosing <g> ancestors
+	vpW, vpH  float64    // current viewport size, for percentage lengths
 }
 
 // renderer holds the target surface and per-page options.
@@ -117,6 +136,138 @@ type renderer struct {
 	ink    color.RGBA
 	paper  color.RGBA
 	groups []Group
+	grads  map[string]gradient // paint servers, by id
+}
+
+// gradient is one <linearGradient> or <radialGradient>. Coordinates are kept as
+// authored: in the default objectBoundingBox units they are fractions of the
+// filled shape's bounding box, which is why a gradient cannot be turned into a
+// [vector.Paint] until the shape being painted is known.
+type gradient struct {
+	radial     bool
+	x1, y1     float64 // linear: start point
+	x2, y2     float64 // linear: end point
+	cx, cy, rr float64 // radial: centre and radius
+	userSpace  bool    // gradientUnits="userSpaceOnUse"
+	stops      []vector.Stop
+}
+
+// collectGradients walks the whole document once, recording every paint server it
+// finds by id. A pre-pass is required because SVG allows a shape to reference a
+// gradient declared after it.
+func (r *renderer) collectGradients(n *xnode) {
+	switch n.XMLName.Local {
+	case "linearGradient", "radialGradient":
+		if id, ok := n.attr("id"); ok && id != "" {
+			r.grads[id] = parseGradient(n)
+		}
+	}
+	for i := range n.Children {
+		r.collectGradients(&n.Children[i])
+	}
+}
+
+// parseGradient reads one paint server element and its <stop> children.
+func parseGradient(n *xnode) gradient {
+	g := gradient{
+		radial:    n.XMLName.Local == "radialGradient",
+		x2:        1, // SVG default: x1,y1,y2 = 0, x2 = 1
+		cx:        0.5,
+		cy:        0.5,
+		rr:        0.5,
+		userSpace: n.attrOr("gradientUnits", "") == "userSpaceOnUse",
+	}
+	num := func(name string, dst *float64) {
+		if v, ok := n.attr(name); ok {
+			if f, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(v, "%")), 64); err == nil {
+				if strings.HasSuffix(strings.TrimSpace(v), "%") {
+					f /= 100
+				}
+				*dst = f
+			}
+		}
+	}
+	num("x1", &g.x1)
+	num("y1", &g.y1)
+	num("x2", &g.x2)
+	num("y2", &g.y2)
+	num("cx", &g.cx)
+	num("cy", &g.cy)
+	num("r", &g.rr)
+	for i := range n.Children {
+		c := &n.Children[i]
+		if c.XMLName.Local != "stop" {
+			continue
+		}
+		off := 0.0
+		if v, ok := c.attr("offset"); ok {
+			t := strings.TrimSpace(v)
+			if f, err := strconv.ParseFloat(strings.TrimSuffix(t, "%"), 64); err == nil {
+				if strings.HasSuffix(t, "%") {
+					f /= 100
+				}
+				off = f
+			}
+		}
+		col, ok := parseHexColor(c.attrOr("stop-color", ""))
+		if !ok {
+			switch strings.TrimSpace(c.attrOr("stop-color", "")) {
+			case "white":
+				col = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+			case "black":
+				col = color.RGBA{A: 255}
+			default:
+				continue
+			}
+		}
+		if v, ok := c.attr("stop-opacity"); ok {
+			if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f >= 0 && f <= 1 {
+				col.A = uint8(f * 255)
+			}
+		}
+		g.stops = append(g.stops, vector.Stop{Offset: off, Color: col})
+	}
+	return g
+}
+
+// paintExists reports whether a paint reference can be resolved. A reference to
+// an id the document never declares must leave the shape UNPAINTED: treating it
+// as an inherited colour is what flooded every gradient-filled logo with the
+// black root fill.
+func (r *renderer) paintExists(ref string) bool {
+	if ref == "" {
+		return true
+	}
+	_, ok := r.grads[ref]
+	return ok
+}
+
+// paintFor turns a resolved paint into a [vector.Paint] for the box the shape
+// covers. An objectBoundingBox gradient is placed across that box; a
+// userSpaceOnUse one is placed by the current transform.
+func (r *renderer) paintFor(st state, ref string, flat color.RGBA, ox, oy, w, h int) vector.Paint {
+	g, ok := r.grads[ref]
+	if !ok || len(g.stops) == 0 {
+		flat.A = 255
+		return vector.SolidPaint{Color: flat}
+	}
+	mapPt := func(x, y float64) (float64, float64) {
+		if g.userSpace {
+			return st.m.apply(x, y)
+		}
+		return float64(ox) + x*float64(w), float64(oy) + y*float64(h)
+	}
+	if g.radial {
+		cx, cy := mapPt(g.cx, g.cy)
+		rr := g.rr * float64(w)
+		if g.userSpace {
+			rr = g.rr * st.m.scale()
+		}
+		return vector.NewRadialGradient(cx, cy, rr, vector.Pad, g.stops...)
+	}
+	x1, y1 := mapPt(g.x1, g.y1)
+	x2, y2 := mapPt(g.x2, g.y2)
+	return vector.NewLinearGradient(x1, y1, x2, y2, vector.Pad, g.stops...)
 }
 
 // Rasterize parses ONE SVG document and renders it to a Result. It returns an
@@ -167,12 +318,16 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 		}
 	}
 
+	r.grads = map[string]gradient{}
+	r.collectGradients(&root)
+
 	st := state{
-		m:     matrix{scale, 0, 0, scale, 0, 0},
-		fill:  ink,
-		paint: true,
-		vpW:   vbW,
-		vpH:   vbH,
+		m:       matrix{scale, 0, 0, scale, 0, 0},
+		fill:    ink,
+		paint:   true,
+		strokeW: 1, // the SVG default
+		vpW:     vbW,
+		vpH:     vbH,
 	}
 	for i := range root.Children {
 		r.render(&root.Children[i], st)
@@ -209,7 +364,19 @@ func (r *renderer) render(n *xnode, parent state) {
 		st.m = parent.m.mul(parseTransform(v))
 	}
 	if v, ok := n.attr("fill"); ok {
-		st.fill, st.paint = resolveFill(v, parent.fill, parent.paint, r.ink, r.paper)
+		st.fill, st.paint, st.fillRef = resolveFill(v, parent.fill, parent.paint, r.ink, r.paper)
+		st.paint = st.paint && r.paintExists(st.fillRef)
+	}
+	if v, ok := n.attr("stroke"); ok {
+		st.stroke, st.strokeOn, st.strokeRef = resolveFill(v, parent.stroke, parent.strokeOn, r.ink, r.paper)
+		st.strokeOn = st.strokeOn && r.paintExists(st.strokeRef)
+	}
+	if v, ok := n.attr("stroke-width"); ok {
+		// An explicit width of zero switches the outline OFF, so the value is
+		// taken whatever it is rather than only when positive. A width this
+		// subset cannot parse reads as zero, which matches the package's rule
+		// that a malformed shape is skipped rather than guessed at.
+		st.strokeW = parseLen(v, st.vpW)
 	}
 	if n.XMLName.Local == "g" {
 		idx := len(r.groups)
@@ -280,21 +447,29 @@ func (r *renderer) addBounds(st state, rect image.Rectangle) {
 	}
 }
 
-// fillPath rasterizes and composites a device-space path, recording the covered
-// bounding box against the enclosing groups.
+// fillPath rasterizes a device-space path: first its interior, then its outline,
+// recording the covered bounding box against the enclosing groups.
+//
+// The two are composited in turn rather than gathered first, because a
+// Rasterizer's coverage grid aliases its own scratch buffer and is only valid
+// until the next Fill or Stroke call.
 func (r *renderer) fillPath(p *vector.Path, st state) {
-	if !st.paint {
-		return
-	}
 	var rz vector.Rasterizer
-	cov, ox, oy, w, h, ok := rz.Fill(p, vector.NonZero, r.img.W, r.img.H)
-	if !ok {
+	if st.paint {
+		if cov, ox, oy, w, h, ok := rz.Fill(p, vector.NonZero, r.img.W, r.img.H); ok {
+			vector.Composite(r.img, cov, ox, oy, w, h, r.paintFor(st, st.fillRef, st.fill, ox, oy, w, h))
+			r.addBounds(st, image.Rect(ox, oy, ox+w, oy+h))
+		}
+	}
+	if !st.strokeOn || st.strokeW <= 0 {
 		return
 	}
-	c := st.fill
-	c.A = 255
-	vector.Composite(r.img, cov, ox, oy, w, h, vector.SolidPaint{Color: c})
-	r.addBounds(st, image.Rect(ox, oy, ox+w, oy+h))
+	// A stroke width is a length in user units, so it passes through the
+	// transform like any other length.
+	if cov, ox, oy, w, h, ok := rz.Stroke(p, st.strokeW*st.m.scale(), r.img.W, r.img.H); ok {
+		vector.Composite(r.img, cov, ox, oy, w, h, r.paintFor(st, st.strokeRef, st.stroke, ox, oy, w, h))
+		r.addBounds(st, image.Rect(ox, oy, ox+w, oy+h))
+	}
 }
 
 // drawPath fills a <path> element.
@@ -312,7 +487,7 @@ func (r *renderer) drawPath(n *xnode, st state) {
 
 // drawRect fills a <rect> element.
 func (r *renderer) drawRect(n *xnode, st state) {
-	if !st.paint {
+	if !st.paint && !st.strokeOn {
 		return
 	}
 	x := parseLen(n.attrOr("x", "0"), st.vpW)
@@ -322,22 +497,34 @@ func (r *renderer) drawRect(n *xnode, st state) {
 	if w <= 0 || h <= 0 {
 		return
 	}
+	rx := parseLen(n.attrOr("rx", n.attrOr("ry", "0")), st.vpW)
+	ry := parseLen(n.attrOr("ry", n.attrOr("rx", "0")), st.vpH)
+	if rx > w/2 {
+		rx = w / 2
+	}
+	if ry > h/2 {
+		ry = h / 2
+	}
 	p := vector.NewPath()
-	x0, y0 := st.m.apply(x, y)
-	x1, y1 := st.m.apply(x+w, y)
-	x2, y2 := st.m.apply(x+w, y+h)
-	x3, y3 := st.m.apply(x, y+h)
-	p.MoveTo(x0, y0)
-	p.LineTo(x1, y1)
-	p.LineTo(x2, y2)
-	p.LineTo(x3, y3)
-	p.Close()
+	if rx > 0 && ry > 0 {
+		buildRoundRect(p, x, y, w, h, rx, ry, st.m)
+	} else {
+		x0, y0 := st.m.apply(x, y)
+		x1, y1 := st.m.apply(x+w, y)
+		x2, y2 := st.m.apply(x+w, y+h)
+		x3, y3 := st.m.apply(x, y+h)
+		p.MoveTo(x0, y0)
+		p.LineTo(x1, y1)
+		p.LineTo(x2, y2)
+		p.LineTo(x3, y3)
+		p.Close()
+	}
 	r.fillPath(p, st)
 }
 
 // drawCircle fills a <circle> element, approximating the disc with four cubics.
 func (r *renderer) drawCircle(n *xnode, st state) {
-	if !st.paint {
+	if !st.paint && !st.strokeOn {
 		return
 	}
 	cx := parseLen(n.attrOr("cx", "0"), st.vpW)
