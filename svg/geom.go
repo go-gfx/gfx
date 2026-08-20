@@ -8,8 +8,11 @@ package svg
 
 import (
 	"image/color"
+	"math"
 	"strconv"
 	"strings"
+
+	"github.com/go-gfx/gfx/vector"
 )
 
 // matrix is a 2x3 affine transform [a b c d e f] mapping a point (x, y) to
@@ -24,6 +27,13 @@ func identity() matrix { return matrix{1, 0, 0, 1, 0, 0} }
 // apply maps a point through the matrix.
 func (m matrix) apply(x, y float64) (float64, float64) {
 	return m.a*x + m.c*y + m.e, m.b*x + m.d*y + m.f
+}
+
+// scale is the uniform length factor the matrix applies, taken as the square root
+// of the absolute determinant. A stroke width is a length in user units, so it
+// has to be carried through the transform this way rather than left unscaled.
+func (m matrix) scale() float64 {
+	return math.Sqrt(math.Abs(m.a*m.d - m.b*m.c))
 }
 
 // mul returns the composition m∘n, i.e. the matrix c such that c.apply(p)
@@ -118,25 +128,51 @@ func parseLen(s string, ref float64) float64 {
 	return 0
 }
 
-// resolveFill maps an SVG fill attribute value to a concrete colour plus a flag
-// telling whether the shape should be painted at all. inherit* provide the value
-// used when the attribute is absent, empty or unrecognised. ink is the colour for
-// black/currentColor; paper is the colour for white.
-func resolveFill(v string, inherit color.RGBA, inheritPaint bool, ink, paper color.RGBA) (color.RGBA, bool) {
-	switch strings.TrimSpace(v) {
+// resolveFill maps an SVG fill or stroke attribute value to a concrete colour, a
+// flag telling whether the shape should be painted at all, and the id of a paint
+// server when the value is a url(#id) reference. inherit* provide the value used
+// when the attribute is absent or empty. ink is the colour for black/currentColor;
+// paper is the colour for white.
+//
+// A url(#id) reference returns ref set and paint true: the caller resolves the id
+// against the document's gradients at paint time, because a gradient in the
+// default objectBoundingBox units cannot be placed until the shape it fills is
+// known. An UNRECOGNISED value returns paint false rather than inheriting: a
+// document asking for something this subset does not implement must come out
+// unpainted, not silently flooded with the inherited colour — that is what turned
+// every gradient-filled logo into a black square.
+func resolveFill(v string, inherit color.RGBA, inheritPaint bool, ink, paper color.RGBA) (color.RGBA, bool, string) {
+	t := strings.TrimSpace(v)
+	switch t {
 	case "":
-		return inherit, inheritPaint
+		return inherit, inheritPaint, ""
 	case "none":
-		return color.RGBA{}, false
+		return color.RGBA{}, false, ""
 	case "black", "currentColor":
-		return ink, true
+		return ink, true, ""
 	case "white":
-		return paper, true
+		return paper, true, ""
 	}
-	if c, ok := parseHexColor(v); ok {
-		return c, true
+	if id, ok := parsePaintRef(t); ok {
+		return inherit, true, id
 	}
-	return inherit, inheritPaint
+	if c, ok := parseHexColor(t); ok {
+		return c, true, ""
+	}
+	return color.RGBA{}, false, ""
+}
+
+// parsePaintRef extracts the id from a url(#id) paint reference.
+func parsePaintRef(s string) (string, bool) {
+	if !strings.HasPrefix(s, "url(") || !strings.HasSuffix(s, ")") {
+		return "", false
+	}
+	id := strings.TrimSpace(s[4 : len(s)-1])
+	id = strings.Trim(id, "\"'")
+	if !strings.HasPrefix(id, "#") || len(id) < 2 {
+		return "", false
+	}
+	return id[1:], true
 }
 
 // parseHexColor parses #rgb and #rrggbb colours. It reports ok=false otherwise.
@@ -186,4 +222,33 @@ func hexByte(hi, lo byte) (byte, bool) {
 		return 0, false
 	}
 	return h<<4 | l, true
+}
+
+// buildRoundRect appends a rounded rectangle to p, transformed by m. The corner
+// arcs are the standard four-cubic circle approximation, which is what <rect rx>
+// needs: every org logo in this fleet is a rounded square, and without rx they
+// all came out with sharp corners.
+func buildRoundRect(p *vector.Path, x, y, w, h, rx, ry float64, m matrix) {
+	const k = 0.5522847498307936
+	cx, cy := k*rx, k*ry
+	at := func(px, py float64) (float64, float64) { return m.apply(px, py) }
+	move := func(px, py float64) { ax, ay := at(px, py); p.MoveTo(ax, ay) }
+	line := func(px, py float64) { ax, ay := at(px, py); p.LineTo(ax, ay) }
+	cube := func(c1x, c1y, c2x, c2y, ex, ey float64) {
+		a1x, a1y := at(c1x, c1y)
+		a2x, a2y := at(c2x, c2y)
+		bx, by := at(ex, ey)
+		p.CubicTo(a1x, a1y, a2x, a2y, bx, by)
+	}
+	r, b := x+w, y+h
+	move(x+rx, y)
+	line(r-rx, y)
+	cube(r-rx+cx, y, r, y+ry-cy, r, y+ry)
+	line(r, b-ry)
+	cube(r, b-ry+cy, r-rx+cx, b, r-rx, b)
+	line(x+rx, b)
+	cube(x+rx-cx, b, x, b-ry+cy, x, b-ry)
+	line(x, y+ry)
+	cube(x, y+ry-cy, x+rx-cx, y, x+rx, y)
+	p.Close()
 }
