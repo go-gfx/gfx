@@ -108,6 +108,18 @@ jobs:
           # So the arithmetic is fine and the element read is not. Nothing in
           # this repository can fix that; pinning the toolchain keeps the lane
           # meaningful until upstream does.
+          #
+          # Root cause and fix, both now known -- golang/go#81000. TRUNCDW is
+          # declared with a floating-point output while producing an integer,
+          # so an int-typed value gets an FP register; a uint8 that inherits
+          # one is then spilled with an 8-byte MOVD into a 1-byte slot,
+          # destroying its neighbour. CL 820040 wraps the conversions in
+          # MOVWfpgp/MOVVfpgp so the integer lands in a GP register.
+          #
+          # UNPIN when a Go release containing CL 820040 is out: set this back
+          # to 'stable' and delete this comment. Verified against that CL --
+          # its parent still fails TestSkimageLabToRGBOutOfGamut with
+          # [184 0 255], and the whole package passes with it.
           go-version: '1.26.4'
       - run: sudo apt-get update && sudo apt-get install -y qemu-user-static
       - name: Test under qemu (${{ matrix.goarch }})
