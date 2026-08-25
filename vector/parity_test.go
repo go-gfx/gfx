@@ -250,6 +250,30 @@ func TestFillParityAgainstReplacedCode(t *testing.T) {
 	t.Logf("fill parity: %d shape/rule/clamp combinations, all byte-identical", total)
 }
 
+// strokeParityTol is how far the two accounts of a stroke may differ. The
+// reference samples sixty-four points along each sub-scanline where the
+// rasteriser works the overlap out exactly, so it quantises by about a
+// sixtieth; the rasteriser draws a round end as a many-sided polygon, so its
+// rim falls up to a fiftieth of a pixel inside the circle. Neither slack is
+// anywhere near the half a pixel's worth of coverage that a stroke assembled
+// wrongly out of its pieces loses at every seam, which is what this is here to
+// catch.
+const strokeParityTol = 0.05
+
+// coversClose reports the first index at which two coverage grids differ by
+// more than tol, or -1 when they agree everywhere.
+func coversClose(got, want []float64, tol float64) int {
+	if len(got) != len(want) {
+		return 0
+	}
+	for i := range got {
+		if math.Abs(got[i]-want[i]) > tol {
+			return i
+		}
+	}
+	return -1
+}
+
 // TestStrokeParityAgainstReplacedCode is the stroke counterpart.
 func TestStrokeParityAgainstReplacedCode(t *testing.T) {
 	var rz Rasterizer
@@ -273,7 +297,7 @@ func TestStrokeParityAgainstReplacedCode(t *testing.T) {
 						ctx, gox, goy, gw, gh, wox, woy, ww, wh)
 					continue
 				}
-				if idx := coversEqual(gotCov, wantCov); idx >= 0 {
+				if idx := coversClose(gotCov, wantCov, strokeParityTol); idx >= 0 {
 					t.Errorf("%s: coverage diverged at index %d: got %v want %v",
 						ctx, idx, gotCov[idx], wantCov[idx])
 				}
@@ -284,7 +308,7 @@ func TestStrokeParityAgainstReplacedCode(t *testing.T) {
 	if total == 0 {
 		t.Fatal("stroke parity sweep asserted nothing")
 	}
-	t.Logf("stroke parity: %d shape/width/clamp combinations, all byte-identical", total)
+	t.Logf("stroke parity: %d shape/width/clamp combinations, all within %v coverage", total, strokeParityTol)
 }
 
 func ftoa(f float64) string {

@@ -397,8 +397,16 @@ func refFill(pth *Path, rule FillRule, clampW, clampH int) (cov []float64, ox, o
 	return cov, ox, oy, w, h, true
 }
 
-// refStroke is the verbatim old PixelPainter.StrokePath coverage stage (before
-// composite).
+// refStroke is an independent account of what a stroke covers, worked out a
+// completely different way from the code under test. A round-capped,
+// round-joined stroke of width 2*hw is, by definition, every point within hw
+// of the line — so this measures each pixel by sampling it on a fine grid and
+// asking each sample how far it is from the nearest segment. Nothing about
+// how the pieces are cut up or put together enters into it, which is the whole
+// point: the code under test builds a stroke out of overlapping pieces, and
+// the way those pieces are combined is exactly what can go wrong.
+//
+// It is far too slow to ship — it is a definition, not an implementation.
 func refStroke(pth *Path, width float64, clampW, clampH int) (cov []float64, ox, oy, w, h int, ok bool) {
 	if pth == nil || width <= 0 {
 		return nil, 0, 0, 0, 0, false
@@ -428,23 +436,92 @@ func refStroke(pth *Path, width float64, clampW, clampH int) (cov []float64, ox,
 		return nil, 0, 0, 0, 0, false
 	}
 	cov = make([]float64, w*h)
-	var xs []refCrossing
-	for _, s := range segs {
-		re := refSegRectEdges(s.x0, s.y0, s.x1, s.y1, hw)
-		if re == nil {
-			continue
+	var near []refEdge
+	for j := 0; j < h; j++ {
+		for i := 0; i < w; i++ {
+			// Only the segments that come within hw of this pixel at all can
+			// put anything in it; the rest need not be asked 256 times.
+			px0, py0 := float64(ox+i), float64(oy+j)
+			near = near[:0]
+			for _, e := range segs {
+				if refSegNear(e, px0, py0, hw) {
+					near = append(near, e)
+				}
+			}
+			if len(near) == 0 {
+				continue
+			}
+			cov[j*w+i] = refPixelCovered(near, px0, py0, hw)
 		}
-		rminX, rminY, rmaxX, rmaxY := refEdgeBounds(re)
-		sox, soy, sw, sh, ok := refSubBox(rminX, rminY, rmaxX, rmaxY, ox, oy, w, h)
-		if !ok {
-			continue
-		}
-		tmp := make([]float64, sw*sh)
-		xs = refCoverInto(tmp, re, NonZero, sox, soy, sw, sh, refPathSS, xs[:0])
-		refMaxSub(cov, w, tmp, sox-ox, soy-oy, sw, sh)
-	}
-	for _, v := range verts {
-		refDiskMax(cov, ox, oy, w, h, v.x, v.y, hw)
 	}
 	return cov, ox, oy, w, h, true
+}
+
+// refStrokeSamples is how many points across a pixel are asked about on each
+// of its sub-scanlines. Vertically the reference samples the SAME sub-scanlines
+// the rasteriser does: how finely a row is cut is a stated property of the
+// rasteriser, not something for the reference to have an opinion about, and
+// matching it leaves the union — the thing being checked — as the only source
+// of disagreement.
+const refStrokeSamples = 64
+
+// refEdgeNudge is small enough to change nothing but which side of an exact
+// tie a sample falls on.
+const refEdgeNudge = 1e-9
+
+// refPixelCovered is the share of the pixel whose lower-left corner is
+// (px0, py0) that lies within hw of one of the segments.
+func refPixelCovered(segs []refEdge, px0, py0, hw float64) float64 {
+	inside := 0
+	for sy := 0; sy < refPathSS; sy++ {
+		// The rasteriser counts a sub-scanline that lands exactly on the
+		// bottom edge of a shape as inside it and one on the top edge as
+		// outside — the half-open rule that keeps a vertex shared by two edges
+		// from being counted twice. Asking a hair above the sub-scanline says
+		// the same thing with a closed test.
+		y := py0 + (float64(sy)+0.5)/refPathSS + refEdgeNudge
+		for sx := 0; sx < refStrokeSamples; sx++ {
+			x := px0 + (float64(sx)+0.5)/refStrokeSamples
+			for _, e := range segs {
+				if refDistToSeg(x, y, e) <= hw {
+					inside++
+					break
+				}
+			}
+		}
+	}
+	return float64(inside) / (refPathSS * refStrokeSamples)
+}
+
+// refSegNear reports whether a segment can reach into the pixel at all.
+func refSegNear(e refEdge, px0, py0, hw float64) bool {
+	lo, hi := e.x0, e.x1
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	if hi+hw < px0 || lo-hw > px0+1 {
+		return false
+	}
+	lo, hi = e.y0, e.y1
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	return !(hi+hw < py0 || lo-hw > py0+1)
+}
+
+// refDistToSeg is how far a point is from a segment, which for a zero-length
+// one is how far it is from the point itself.
+func refDistToSeg(x, y float64, e refEdge) float64 {
+	dx, dy := e.x1-e.x0, e.y1-e.y0
+	l2 := dx*dx + dy*dy
+	if l2 == 0 {
+		return math.Hypot(x-e.x0, y-e.y0)
+	}
+	t := ((x-e.x0)*dx + (y-e.y0)*dy) / l2
+	if t < 0 {
+		t = 0
+	} else if t > 1 {
+		t = 1
+	}
+	return math.Hypot(x-(e.x0+t*dx), y-(e.y0+t*dy))
 }

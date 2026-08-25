@@ -6,7 +6,10 @@
 
 package vector
 
-import "math"
+import (
+	"math"
+	"slices"
+)
 
 // pathSS is the number of vertical sub-scanlines sampled per pixel row. The
 // horizontal coverage within a row is computed analytically (exact span overlap),
@@ -51,47 +54,6 @@ func clampBox(minX, minY, maxX, maxY float64, clampW, clampH int) (ox, oy, w, h 
 	return ox, oy, w, h, true
 }
 
-// subBox intersects a float bounding box with the integer box [ox,oy,w,h],
-// returning the clamped integer sub-box origin/extent and ok=false when the
-// overlap is empty.
-func subBox(minX, minY, maxX, maxY float64, ox, oy, w, h int) (sox, soy, sw, sh int, ok bool) {
-	sox = int(math.Floor(minX))
-	soy = int(math.Floor(minY))
-	sx1 := int(math.Ceil(maxX))
-	sy1 := int(math.Ceil(maxY))
-	if sox < ox {
-		sox = ox
-	}
-	if soy < oy {
-		soy = oy
-	}
-	if sx1 > ox+w {
-		sx1 = ox + w
-	}
-	if sy1 > oy+h {
-		sy1 = oy + h
-	}
-	sw, sh = sx1-sox, sy1-soy
-	if sw <= 0 || sh <= 0 {
-		return 0, 0, 0, 0, false
-	}
-	return sox, soy, sw, sh, true
-}
-
-// maxSub merges the sw*sh coverage tile src into the dstW-wide accumulator dst
-// at offset (dx, dy) by per-pixel maximum (a coverage union over a sub-region).
-func maxSub(dst []float64, dstW int, src []float64, dx, dy, sw, sh int) {
-	for j := 0; j < sh; j++ {
-		drow := dst[(dy+j)*dstW+dx : (dy+j)*dstW+dx+sw]
-		srow := src[j*sw : j*sw+sw]
-		for i, v := range srow {
-			if v > drow[i] {
-				drow[i] = v
-			}
-		}
-	}
-}
-
 // fillEdges builds the fill edge list from flattened contours: consecutive
 // vertices plus an implicit closing edge per sub-path. Sub-paths with fewer than
 // two points enclose no area and are dropped.
@@ -122,19 +84,107 @@ func coverGrid(edges []edge, rule FillRule, ox, oy, w, h, ss int) []float64 {
 	return cov
 }
 
+// A sweep is the working set of one coverage scan: the crossings of the
+// sub-scanline being looked at, and the index that says which edges can cross
+// it at all. A path of any size is walked once rather than once per scanline,
+// which is what keeps a finely cut curve — tens of thousands of edges over a
+// tall box — from taking the product of the two. It is kept on the
+// [Rasterizer] so a stream of draws allocates nothing.
+type sweep struct {
+	xs     []crossing
+	ymin   []float64 // per edge, the scanline it starts to matter on
+	ymax   []float64 // per edge, the one it stops mattering on
+	order  []int32   // edges by ascending ymin
+	active []int32   // the ones the scan is inside, in no particular order
+	next   int       // how far into order the scan has reached
+}
+
+// start indexes the edges for a scan that will ask for ascending scanlines.
+// Horizontal edges cross no scanline at all and are left out entirely.
+func (sc *sweep) start(edges []edge) {
+	sc.ymin = grow(sc.ymin, len(edges))
+	sc.ymax = grow(sc.ymax, len(edges))
+	sc.order = sc.order[:0]
+	sc.active = sc.active[:0]
+	sc.next = 0
+	for i, e := range edges {
+		if e.y0 == e.y1 {
+			continue
+		}
+		lo, hi := e.y0, e.y1
+		if lo > hi {
+			lo, hi = hi, lo
+		}
+		sc.ymin[i], sc.ymax[i] = lo, hi
+		sc.order = append(sc.order, int32(i))
+	}
+	slices.SortFunc(sc.order, func(a, b int32) int {
+		switch {
+		case sc.ymin[a] < sc.ymin[b]:
+			return -1
+		case sc.ymin[a] > sc.ymin[b]:
+			return 1
+		}
+		return 0
+	})
+}
+
+// grow returns s resized to n, reusing its backing array when it is big enough.
+func grow(s []float64, n int) []float64 {
+	if cap(s) < n {
+		return make([]float64, n)
+	}
+	return s[:n]
+}
+
+// crossings is where the edges cut the line y=sy. Successive calls must ask
+// for ascending sy: the scan takes up each edge as it reaches it and drops it
+// once past, so no edge is looked at on a scanline it cannot reach.
+func (sc *sweep) crossings(edges []edge, sy float64) []crossing {
+	for sc.next < len(sc.order) && sc.ymin[sc.order[sc.next]] <= sy {
+		sc.active = append(sc.active, sc.order[sc.next])
+		sc.next++
+	}
+	keep := sc.active[:0]
+	for _, i := range sc.active {
+		if sc.ymax[i] > sy {
+			keep = append(keep, i)
+		}
+	}
+	sc.active = keep
+	sc.xs = sc.xs[:0]
+	for _, i := range sc.active {
+		// Every active edge has been reached and not yet passed, under the
+		// half-open [ymin, ymax) convention that counts a vertex shared by two
+		// edges exactly once.
+		e := edges[i]
+		dir := 1
+		if e.y0 > e.y1 {
+			dir = -1
+		}
+		t := (sy - e.y0) / (e.y1 - e.y0)
+		sc.xs = append(sc.xs, crossing{x: e.x0 + t*(e.x1-e.x0), dir: dir})
+	}
+	return sc.xs
+}
+
 // coverInto accumulates per-pixel coverage (0..1) of the region enclosed by
 // edges under rule INTO cov (row-major w*h, caller-zeroed) over the integer box
 // [ox,oy,w,h], sampling ss vertical sub-scanlines per row with analytic
-// horizontal coverage. xs is a scratch crossings buffer whose grown backing is
-// returned so a caller can reuse it across many calls (no per-call allocation).
-func coverInto(cov []float64, edges []edge, rule FillRule, ox, oy, w, h, ss int, xs []crossing) []crossing {
+// horizontal coverage. sc is a scratch working set a caller reuses across many
+// calls so nothing is allocated per call; nil asks for a throwaway one.
+func coverInto(cov []float64, edges []edge, rule FillRule, ox, oy, w, h, ss int, sc *sweep) {
+	if sc == nil {
+		sc = &sweep{}
+	}
+	sc.start(edges)
 	inv := 1.0 / float64(ss)
 	oxf := float64(ox)
 	for py := 0; py < h; py++ {
 		row := cov[py*w : py*w+w]
 		for s := 0; s < ss; s++ {
 			sy := float64(oy+py) + (float64(s)+0.5)*inv
-			xs = crossingsAt(edges, sy, xs[:0])
+			xs := sc.crossings(edges, sy)
 			if len(xs) < 2 {
 				continue
 			}
@@ -148,7 +198,6 @@ func coverInto(cov []float64, edges []edge, rule FillRule, ox, oy, w, h, ss int,
 			}
 		}
 	}
-	return xs
 }
 
 // sortCrossings orders a scanline's crossings by ascending x with an in-place
@@ -166,32 +215,6 @@ func sortCrossings(xs []crossing) {
 		}
 		xs[j+1] = c
 	}
-}
-
-// crossingsAt collects the x-crossings of every edge with the horizontal line
-// y=sy into dst (which the caller resets), using the half-open [ymin, ymax)
-// convention so a vertex shared by two edges is counted exactly once.
-func crossingsAt(edges []edge, sy float64, dst []crossing) []crossing {
-	for _, e := range edges {
-		if e.y0 == e.y1 {
-			continue // horizontal edge never crosses a scanline
-		}
-		var dir int
-		if e.y0 < e.y1 {
-			if sy < e.y0 || sy >= e.y1 {
-				continue
-			}
-			dir = 1
-		} else {
-			if sy < e.y1 || sy >= e.y0 {
-				continue
-			}
-			dir = -1
-		}
-		t := (sy - e.y0) / (e.y1 - e.y0)
-		dst = append(dst, crossing{x: e.x0 + t*(e.x1-e.x0), dir: dir})
-	}
-	return dst
 }
 
 // insideRule reports whether a winding count means "inside" under rule.
@@ -230,75 +253,6 @@ func addSpan(row []float64, xa, xb, ox float64, w int, weight float64) {
 			row[ix] += c * weight
 		}
 	}
-}
-
-// segRectEdges returns the four edges of the width-2*hw rectangle centred on the
-// segment (x0,y0)->(x1,y1). A zero-length segment has no rectangle (nil): the
-// vertex disk covers that spot.
-func segRectEdges(x0, y0, x1, y1, hw float64) []edge {
-	dx, dy := x1-x0, y1-y0
-	l := math.Hypot(dx, dy)
-	if l == 0 {
-		return nil
-	}
-	nx, ny := -dy/l*hw, dx/l*hw
-	ax, ay := x0+nx, y0+ny
-	bx, by := x1+nx, y1+ny
-	cx, cy := x1-nx, y1-ny
-	ex, ey := x0-nx, y0-ny
-	return []edge{{ax, ay, bx, by}, {bx, by, cx, cy}, {cx, cy, ex, ey}, {ex, ey, ax, ay}}
-}
-
-// diskMax unions (per-pixel MAX) a filled disk of radius r centred at (cx, cy)
-// into cov, anti-aliasing the rim with the distance formula.
-func diskMax(cov []float64, ox, oy, w, h int, cx, cy, r float64) {
-	if r <= 0 {
-		return
-	}
-	// Scan only the disk's clamped bounding box; pixels beyond r+0.5 from the
-	// centre have coverage <= 0 and were skipped anyway, so the output is
-	// unchanged while a big surrounding stroke box is no longer walked in full.
-	i0, j0, i1, j1 := diskSpan(ox, oy, w, h, cx, cy, r)
-	for j := j0; j < j1; j++ {
-		py := float64(oy+j) + 0.5
-		for i := i0; i < i1; i++ {
-			px := float64(ox+i) + 0.5
-			c := r + 0.5 - math.Hypot(px-cx, py-cy)
-			if c <= 0 {
-				continue
-			}
-			if c > 1 {
-				c = 1
-			}
-			if k := j*w + i; c > cov[k] {
-				cov[k] = c
-			}
-		}
-	}
-}
-
-// diskSpan returns the half-open pixel index range [i0,i1)x[j0,j1) of the disk
-// of radius r centred at (cx,cy), clamped to the box [ox,oy,w,h]. The +0.5
-// margin matches diskMax's rim: any pixel whose centre is farther than r+0.5
-// from the disk centre has zero coverage, so it need never be visited.
-func diskSpan(ox, oy, w, h int, cx, cy, r float64) (i0, j0, i1, j1 int) {
-	i0 = int(math.Floor(cx-r-0.5)) - ox
-	i1 = int(math.Ceil(cx+r+0.5)) - ox
-	j0 = int(math.Floor(cy-r-0.5)) - oy
-	j1 = int(math.Ceil(cy+r+0.5)) - oy
-	if i0 < 0 {
-		i0 = 0
-	}
-	if j0 < 0 {
-		j0 = 0
-	}
-	if i1 > w {
-		i1 = w
-	}
-	if j1 > h {
-		j1 = h
-	}
-	return
 }
 
 // edgeBounds returns the bounding box of an edge list (len >= 1 assumed).

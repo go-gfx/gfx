@@ -64,53 +64,31 @@ func (rz *Rasterizer) Stroke(pth *Path, width float64, clampW, clampH int) (cov 
 }
 
 // StrokeWith rasterises the path as a line drawn in the given style. A stroke
-// is the union of a piece per segment, a piece per corner and a piece per end,
-// taken as a per-pixel coverage MAX so that overlapping pieces never
-// double-darken.
+// is made of a piece per segment, a piece per corner and a piece per end; they
+// all go into one edge list, wound the same way round, and the whole of it is
+// filled once under the nonzero rule.
+//
+// Rasterising each piece on its own and keeping the greater coverage would
+// look like the same thing and is not. Two pieces that meet along a shared
+// edge each cover part of the pixel that edge cuts, and the greater of two
+// halves is a half. A finely cut curve — the way every plotting program writes
+// one — is nothing but such seams, and would come out at half its colour,
+// combed through with lighter notches at every vertex.
 func (rz *Rasterizer) StrokeWith(pth *Path, style StrokeStyle, clampW, clampH int) (cov []float64, ox, oy, w, h int, ok bool) {
 	if pth == nil || style.Width <= 0 {
 		return nil, 0, 0, 0, 0, false
 	}
-	pieces := strokePieces(pth, style)
-	if len(pieces) == 0 {
+	out := rz.strokeEdges(pth, style)
+	if len(out.edges) == 0 {
 		return nil, 0, 0, 0, 0, false
 	}
-	minX, minY, maxX, maxY := piecesBounds(pieces)
-	ox, oy, w, h, ok = clampBox(minX, minY, maxX, maxY, clampW, clampH)
+	ox, oy, w, h, ok = clampBox(out.minX, out.minY, out.maxX, out.maxY, clampW, clampH)
 	if !ok {
 		return nil, 0, 0, 0, 0, false
 	}
 	cov = rz.covScratch(w * h)
-	for _, p := range pieces {
-		if p.edges == nil {
-			diskMax(cov, ox, oy, w, h, p.cx, p.cy, p.r)
-			continue
-		}
-		rz.polyMax(cov, ox, oy, w, h, p.edges)
-	}
+	coverInto(cov, out.edges, NonZero, ox, oy, w, h, pathSS, &rz.sc)
 	return cov, ox, oy, w, h, true
-}
-
-// A strokePiece is one part of a stroke: a polygon, or a disc when edges is
-// nil.
-type strokePiece struct {
-	edges     []edge
-	cx, cy, r float64
-}
-
-// piecesBounds is the box every piece fits inside.
-func piecesBounds(pieces []strokePiece) (minX, minY, maxX, maxY float64) {
-	minX, minY = math.Inf(1), math.Inf(1)
-	maxX, maxY = math.Inf(-1), math.Inf(-1)
-	for _, p := range pieces {
-		a, b, c, d := p.cx-p.r, p.cy-p.r, p.cx+p.r, p.cy+p.r
-		if p.edges != nil {
-			a, b, c, d = edgeBounds(p.edges)
-		}
-		minX, minY = math.Min(minX, a), math.Min(minY, b)
-		maxX, maxY = math.Max(maxX, c), math.Max(maxY, d)
-	}
-	return minX, minY, maxX, maxY
 }
 
 // polyline is one run of the stroke: a list of points and whether it closes
@@ -120,29 +98,158 @@ type polyline struct {
 	closed bool
 }
 
-// strokePieces works out every piece a stroke is made of.
-func strokePieces(pth *Path, style StrokeStyle) []strokePiece {
+// A strokeOut collects what a stroke is made of: the edges of every piece, and
+// the box the stroke truly covers. That box is not quite the box of those
+// edges — a round end or corner is drawn as a polygon that falls a hair inside
+// the circle it stands for, and the box has to be the circle's.
+type strokeOut struct {
+	edges                  []edge
+	minX, minY, maxX, maxY float64
+}
+
+// reset empties the accumulator, keeping whatever room the last stroke needed.
+func (o *strokeOut) reset(edges []edge) {
+	o.edges = edges[:0]
+	o.minX, o.minY = math.Inf(1), math.Inf(1)
+	o.maxX, o.maxY = math.Inf(-1), math.Inf(-1)
+}
+
+// cover widens the box to take in one point.
+func (o *strokeOut) cover(x, y float64) {
+	o.minX, o.minY = math.Min(o.minX, x), math.Min(o.minY, y)
+	o.maxX, o.maxY = math.Max(o.maxX, x), math.Max(o.maxY, y)
+}
+
+// poly adds a closed polygon, always wound the same way round. The nonzero
+// rule counts which way an outline turns, so a piece wound against the others
+// would cancel where the two overlap and cut a hole in the stroke.
+func (o *strokeOut) poly(pts []point) {
+	if signedArea(pts) < 0 {
+		for i, j := 0, len(pts)-1; i < j; i, j = i+1, j-1 {
+			pts[i], pts[j] = pts[j], pts[i]
+		}
+	}
+	for i := range pts {
+		j := (i + 1) % len(pts)
+		o.edges = append(o.edges, edge{pts[i].x, pts[i].y, pts[j].x, pts[j].y})
+		o.cover(pts[i].x, pts[i].y)
+	}
+}
+
+// segment adds the rectangle a straight run of the stroke covers. A segment
+// that goes nowhere covers no rectangle; the cap or corner at that point is
+// what shows.
+func (o *strokeOut) segment(a, b point, hw float64) {
+	dx, dy := b.x-a.x, b.y-a.y
+	l := math.Hypot(dx, dy)
+	if l == 0 {
+		return
+	}
+	nx, ny := -dy/l*hw, dx/l*hw
+	o.poly([]point{
+		{a.x + nx, a.y + ny}, {b.x + nx, b.y + ny},
+		{b.x - nx, b.y - ny}, {a.x - nx, a.y - ny},
+	})
+}
+
+// strokeEdges works out every piece a stroke is made of, over the rasteriser's
+// own scratch so a stream of strokes allocates nothing.
+func (rz *Rasterizer) strokeEdges(pth *Path, style StrokeStyle) *strokeOut {
 	hw := style.Width / 2
-	var out []strokePiece
+	o := &rz.so
+	o.reset(o.edges)
 	for _, line := range strokeLines(pth, style) {
 		pts := line.pts
 		for i := 0; i+1 < len(pts); i++ {
-			if e := segRectEdges(pts[i].x, pts[i].y, pts[i+1].x, pts[i+1].y, hw); e != nil {
-				out = append(out, strokePiece{edges: e})
-			}
+			o.segment(pts[i], pts[i+1], hw)
 		}
 		for i := 1; i+1 < len(pts); i++ {
-			out = append(out, joinPieces(pts[i-1], pts[i], pts[i+1], style, hw)...)
+			o.join(pts[i-1], pts[i], pts[i+1], style, hw)
 		}
 		if line.closed && len(pts) > 2 {
 			// The point where the run meets itself is a corner like any other.
-			out = append(out, joinPieces(pts[len(pts)-2], pts[0], pts[1], style, hw)...)
+			o.join(pts[len(pts)-2], pts[0], pts[1], style, hw)
 			continue
 		}
-		out = append(out, capPieces(pts[1], pts[0], style, hw)...)
-		out = append(out, capPieces(pts[len(pts)-2], pts[len(pts)-1], style, hw)...)
+		o.cap(pts[1], pts[0], style, hw)
+		o.cap(pts[len(pts)-2], pts[len(pts)-1], style, hw)
 	}
-	return out
+	return o
+}
+
+// signedArea is twice the area a polygon encloses, negative when it is wound
+// the other way round.
+func signedArea(pts []point) float64 {
+	sum := 0.0
+	for i := range pts {
+		j := (i + 1) % len(pts)
+		sum += pts[i].x*pts[j].y - pts[j].x*pts[i].y
+	}
+	return sum
+}
+
+// wedge adds the pie slice at c between the rim points p1 and p2, going the
+// way round that sweeps less than a full turn past them. Its rim is stepped as
+// finely as a whole disc of the same size would be.
+func (o *strokeOut) wedge(c, p1, p2 point, r float64) {
+	a1 := math.Atan2(p1.y-c.y, p1.x-c.x)
+	a2 := math.Atan2(p2.y-c.y, p2.x-c.x)
+	sweep := math.Mod(a2-a1, 2*math.Pi)
+	if sweep < 0 {
+		sweep += 2 * math.Pi
+	}
+	if sweep > math.Pi {
+		sweep -= 2 * math.Pi
+	}
+	// At least one flat, however slight the turn: a wedge of no width still
+	// has to be a polygon rather than a division by nothing.
+	step := 2 * math.Pi / float64(discSteps(r))
+	n := 1 + int(math.Abs(sweep)/step)
+	pts := make([]point, 0, n+2)
+	pts = append(pts, c)
+	for i := 0; i <= n; i++ {
+		a := a1 + sweep*float64(i)/float64(n)
+		pts = append(pts, point{c.x + r*math.Cos(a), c.y + r*math.Sin(a)})
+	}
+	o.poly(pts)
+}
+
+// disc adds a disc as a polygon fine enough that its rim cannot be told from a
+// circle. The corners sit on the circle and the flats fall just inside it,
+// never outside — so the pieces never spill past where the geometry says the
+// stroke reaches, and the box is widened to the circle rather than to the
+// polygon.
+func (o *strokeOut) disc(cx, cy, r float64) {
+	n := discSteps(r)
+	pts := make([]point, n)
+	for i := range pts {
+		a := 2 * math.Pi * float64(i) / float64(n)
+		pts[i] = point{cx + r*math.Cos(a), cy + r*math.Sin(a)}
+	}
+	o.poly(pts)
+	o.cover(cx-r, cy-r)
+	o.cover(cx+r, cy+r)
+}
+
+// discTolerance is how far inside the true rim a disc's outline may fall — a
+// hundredth of a pixel, which is well under what a coverage value can show.
+const discTolerance = 0.01
+
+// discSteps is how many flats a disc of the given radius needs to stay within
+// that. A large disc needs more of them; past a point more would say nothing a
+// pixel could show, so there is a ceiling.
+func discSteps(r float64) int {
+	n := 8
+	if c := 1 - discTolerance/r; c > -1 {
+		n = int(math.Ceil(math.Pi / math.Acos(c)))
+	}
+	switch {
+	case n < 8:
+		return 8
+	case n > 512:
+		return 512
+	}
+	return n
 }
 
 // strokeLines flattens a path and applies the dash pattern, giving the runs
@@ -260,20 +367,29 @@ func dashStart(pattern []float64, phase float64) (index int, on bool, left float
 	return index, on, pattern[index] - phase
 }
 
-// joinPieces fills the corner at b, where the run turns from a towards c.
-func joinPieces(a, b, c point, style StrokeStyle, hw float64) []strokePiece {
-	if style.Join == RoundJoin {
-		return []strokePiece{{cx: b.x, cy: b.y, r: hw}}
-	}
+// join fills the corner at b, where the run turns from a towards c. Only the
+// outside of the turn is left open by the two segments meeting there — the
+// inside of it they cover between them — so that wedge is all any join draws,
+// whatever shape it is. On a curve cut into thousands of segments, where each
+// turn is a fraction of a degree, that is a sliver rather than a disc, which is
+// most of what makes such a curve quick to draw.
+func (o *strokeOut) join(a, b, c point, style StrokeStyle, hw float64) {
 	inx, iny, ok1 := unit(b.x-a.x, b.y-a.y)
 	outx, outy, ok2 := unit(c.x-b.x, c.y-b.y)
 	if !ok1 || !ok2 {
-		return nil
+		return
 	}
 	// Which side the corner opens on decides which pair of offsets to join.
 	cross := inx*outy - iny*outx
 	if cross == 0 {
-		return nil // straight on, or doubling back: no corner to fill
+		// Straight on leaves no corner to fill. Doubling back leaves the whole
+		// of the far side of the corner open, and only a round join has
+		// anything to put there: a miter would run away and a bevel would join
+		// a point to itself.
+		if style.Join == RoundJoin && inx*outx+iny*outy < 0 {
+			o.disc(b.x, b.y, hw)
+		}
+		return
 	}
 	sign := 1.0
 	if cross > 0 {
@@ -281,12 +397,17 @@ func joinPieces(a, b, c point, style StrokeStyle, hw float64) []strokePiece {
 	}
 	p1 := point{b.x + sign*-iny*hw, b.y + sign*inx*hw}
 	p2 := point{b.x + sign*-outy*hw, b.y + sign*outx*hw}
+	if style.Join == RoundJoin {
+		o.wedge(b, p1, p2, hw)
+		return
+	}
 	if style.Join == MiterJoin {
 		if m, ok := miterPoint(b, p1, p2, inx, iny, outx, outy, hw, style.MiterLimit); ok {
-			return []strokePiece{{edges: polyEdges([]point{b, p1, m, p2})}}
+			o.poly([]point{b, p1, m, p2})
+			return
 		}
 	}
-	return []strokePiece{{edges: polyEdges([]point{b, p1, p2})}}
+	o.poly([]point{b, p1, p2})
 }
 
 // miterPoint is where the two outer edges cross, when the corner is not so
@@ -310,20 +431,30 @@ func miterPoint(b, p1, p2 point, inx, iny, outx, outy, hw, limit float64) (point
 	return point{b.x + bx*hw/halfCos, b.y + by*hw/halfCos}, true
 }
 
-// capPieces finishes the run at end, which the run reached from prev.
-func capPieces(prev, end point, style StrokeStyle, hw float64) []strokePiece {
+// cap finishes the run at end, which the run reached from prev.
+func (o *strokeOut) cap(prev, end point, style StrokeStyle, hw float64) {
 	switch style.Cap {
 	case RoundCap:
-		return []strokePiece{{cx: end.x, cy: end.y, r: hw}}
+		dx, dy, ok := unit(end.x-prev.x, end.y-prev.y)
+		if !ok {
+			// A run that goes nowhere is a dot: the whole disc shows.
+			o.disc(end.x, end.y, hw)
+			return
+		}
+		// The half of the disc that lies past the end; the run itself covers
+		// the other half. It is drawn as two quarters, because which way round
+		// a half turn goes is not decided by its ends alone.
+		far := point{end.x + dx*hw, end.y + dy*hw}
+		o.wedge(end, point{end.x - dy*hw, end.y + dx*hw}, far, hw)
+		o.wedge(end, far, point{end.x + dy*hw, end.y - dx*hw}, hw)
 	case SquareCap:
 		dx, dy, ok := unit(end.x-prev.x, end.y-prev.y)
 		if !ok {
 			// A run that goes nowhere still gets its square.
 			dx, dy = 1, 0
 		}
-		return []strokePiece{{edges: segRectEdges(end.x, end.y, end.x+dx*hw, end.y+dy*hw, hw)}}
+		o.segment(end, point{end.x + dx*hw, end.y + dy*hw}, hw)
 	}
-	return nil
 }
 
 // unit is the direction of a vector, or false when it has none.
@@ -333,28 +464,4 @@ func unit(dx, dy float64) (x, y float64, ok bool) {
 		return 0, 0, false
 	}
 	return dx / l, dy / l, true
-}
-
-// polyEdges turns a closed polygon into the edges a rasteriser wants.
-func polyEdges(pts []point) []edge {
-	out := make([]edge, 0, len(pts))
-	for i := range pts {
-		j := (i + 1) % len(pts)
-		out = append(out, edge{pts[i].x, pts[i].y, pts[j].x, pts[j].y})
-	}
-	return out
-}
-
-// polyMax rasterises one piece of a stroke and unions it into the accumulator.
-// Coverage is computed from absolute pixel positions, so a piece drawn over
-// its own small box gives the same values as over the whole one.
-func (rz *Rasterizer) polyMax(cov []float64, ox, oy, w, h int, edges []edge) {
-	minX, minY, maxX, maxY := edgeBounds(edges)
-	sox, soy, sw, sh, ok := subBox(minX, minY, maxX, maxY, ox, oy, w, h)
-	if !ok {
-		return
-	}
-	tmp := rz.tmpScratch(sw * sh)
-	rz.xs = coverInto(tmp, edges, NonZero, sox, soy, sw, sh, pathSS, rz.xs[:0])
-	maxSub(cov, w, tmp, sox-ox, soy-oy, sw, sh)
 }

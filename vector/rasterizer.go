@@ -16,9 +16,9 @@ package vector
 //
 // The zero Rasterizer is ready to use; it is not safe for concurrent use.
 type Rasterizer struct {
-	cov []float64  // coverage accumulator
-	tmp []float64  // per-stroke-segment temporary
-	xs  []crossing // one scanline's edge crossings
+	cov []float64 // coverage accumulator
+	so  strokeOut // the pieces one stroke is made of
+	sc  sweep     // the working set of one coverage scan
 }
 
 // covScratch returns cov resized to n float64s and zeroed, growing the backing
@@ -28,18 +28,6 @@ func (rz *Rasterizer) covScratch(n int) []float64 {
 		rz.cov = make([]float64, n)
 	}
 	s := rz.cov[:n]
-	for i := range s {
-		s[i] = 0
-	}
-	return s
-}
-
-// tmpScratch returns tmp resized to n float64s and zeroed (see covScratch).
-func (rz *Rasterizer) tmpScratch(n int) []float64 {
-	if cap(rz.tmp) < n {
-		rz.tmp = make([]float64, n)
-	}
-	s := rz.tmp[:n]
 	for i := range s {
 		s[i] = 0
 	}
@@ -67,7 +55,7 @@ func (rz *Rasterizer) Fill(pth *Path, rule FillRule, clampW, clampH int) (cov []
 		return nil, 0, 0, 0, 0, false
 	}
 	cov = rz.covScratch(w * h)
-	rz.xs = coverInto(cov, edges, rule, ox, oy, w, h, pathSS, rz.xs[:0])
+	coverInto(cov, edges, rule, ox, oy, w, h, pathSS, &rz.sc)
 	return cov, ox, oy, w, h, true
 }
 
