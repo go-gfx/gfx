@@ -357,7 +357,24 @@ func rootViewport(root *xnode) (float64, float64, bool) {
 }
 
 // render walks one element, deriving a child state and drawing leaf shapes.
+// notRendered are elements whose children define something for later use and are
+// never drawn where they stand: <defs> holds reusable content, <clipPath> and
+// <mask> hold shapes that clip or mask rather than paint, and <symbol>,
+// <marker> and <pattern> are templates a <use> or a paint reference instantiates.
+//
+// Painting them is not a small error. pgf wraps every clipped picture in a
+// <clipPath> whose shape is the picture's own frame, so drawing it laid an
+// opaque plate over the whole figure — a pgfplots axis came out as a black
+// rectangle with the data drawn on top of it.
+var notRendered = map[string]bool{
+	"defs": true, "clipPath": true, "mask": true,
+	"symbol": true, "marker": true, "pattern": true,
+}
+
 func (r *renderer) render(n *xnode, parent state) {
+	if notRendered[n.XMLName.Local] {
+		return
+	}
 	st := parent
 
 	if v, ok := n.attr("transform"); ok {
