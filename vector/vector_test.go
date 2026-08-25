@@ -154,7 +154,7 @@ func TestStrokeNoOps(t *testing.T) {
 }
 
 func TestStrokeOffSurfaceSegmentSkipped(t *testing.T) {
-	// A segment lying entirely off the surface exercises Stroke's subBox !ok
+	// A segment lying entirely off the surface exercises Stroke's clamp
 	// branch: it contributes nothing, but the on-surface part still strokes.
 	var rz Rasterizer
 	pth := NewPath().MoveTo(-100, 8).LineTo(-90, 8).LineTo(8, 8)
@@ -266,17 +266,6 @@ func TestAddSpanClampsAndEmpty(t *testing.T) {
 	}
 }
 
-func TestDiskMaxZeroRadiusNoOp(t *testing.T) {
-	cov := make([]float64, 4)
-	diskMax(cov, 0, 0, 2, 2, 0.5, 0.5, 0)
-	diskMax(cov, 0, 0, 2, 2, 0.5, 0.5, -3)
-	for i, v := range cov {
-		if v != 0 {
-			t.Errorf("zero/negative-radius disk wrote cov[%d] = %v", i, v)
-		}
-	}
-}
-
 func TestClampBoxBranches(t *testing.T) {
 	// inside, low overhang (ox/oy<0), high overhang (x1>W, y1>H), and empty.
 	cases := []struct {
@@ -302,45 +291,6 @@ func TestClampBoxBranches(t *testing.T) {
 		}
 		if ox != c.wantX || oy != c.wantY || w != c.wantW || h != c.wantH {
 			t.Errorf("%s: got (%d,%d,%d,%d), want (%d,%d,%d,%d)", c.name, ox, oy, w, h, c.wantX, c.wantY, c.wantW, c.wantH)
-		}
-	}
-}
-
-func TestSubBoxClampAndEmpty(t *testing.T) {
-	cases := []struct {
-		name                       string
-		minX, minY, maxX, maxY     float64
-		wantX, wantY, wantW, wantH int
-		wantOK                     bool
-	}{
-		{"inside", 2, 2, 5, 5, 2, 2, 3, 3, true},
-		{"clampLow", -3, -3, 4, 4, 0, 0, 4, 4, true},
-		{"clampHigh", 6, 6, 15, 15, 6, 6, 4, 4, true},
-		{"empty", 20, 20, 30, 30, 0, 0, 0, 0, false},
-	}
-	for _, c := range cases {
-		sox, soy, sw, sh, ok := subBox(c.minX, c.minY, c.maxX, c.maxY, 0, 0, 10, 10)
-		if ok != c.wantOK {
-			t.Errorf("%s: ok = %v, want %v", c.name, ok, c.wantOK)
-			continue
-		}
-		if !ok {
-			continue
-		}
-		if sox != c.wantX || soy != c.wantY || sw != c.wantW || sh != c.wantH {
-			t.Errorf("%s: got (%d,%d,%d,%d), want (%d,%d,%d,%d)", c.name, sox, soy, sw, sh, c.wantX, c.wantY, c.wantW, c.wantH)
-		}
-	}
-}
-
-func TestMaxSubMergesTileAtOffset(t *testing.T) {
-	dst := []float64{0.1, 0.1, 0.1, 0.1, 0.9, 0.1, 0.1, 0.1, 0.1}
-	src := []float64{0.5, 0.2, 0.05, 0.5} // 2x2 tile
-	maxSub(dst, 3, src, 1, 1, 2, 2)
-	want := []float64{0.1, 0.1, 0.1, 0.1, 0.9, 0.2, 0.1, 0.1, 0.5}
-	for i := range want {
-		if math.Abs(dst[i]-want[i]) > 1e-12 {
-			t.Errorf("dst[%d] = %v, want %v", i, dst[i], want[i])
 		}
 	}
 }

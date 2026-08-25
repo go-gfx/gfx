@@ -238,15 +238,12 @@ func TestJoinsThatAreNotCorners(t *testing.T) {
 	}
 }
 
-func TestUnitAndPolyEdges(t *testing.T) {
+func TestUnitHasNoDirectionWithNoLength(t *testing.T) {
 	if x, y, ok := unit(3, 4); !ok || math.Abs(x-0.6) > 1e-9 || math.Abs(y-0.8) > 1e-9 {
 		t.Errorf("unit(3,4) = %g, %g, %v", x, y, ok)
 	}
 	if _, _, ok := unit(0, 0); ok {
 		t.Error("a vector of no length has a direction")
-	}
-	if got := polyEdges([]point{{0, 0}, {1, 0}, {1, 1}}); len(got) != 3 {
-		t.Errorf("polyEdges gave %d edges", len(got))
 	}
 }
 
@@ -288,5 +285,34 @@ func TestAJoinBesideASegmentOfNoLength(t *testing.T) {
 	pth := NewPath().MoveTo(10, 20).LineTo(20, 20).LineTo(20, 20).LineTo(20, 30)
 	if _, _, _, _, _, ok := (&Rasterizer{}).StrokeWith(pth, StrokeStyle{Width: 6, Join: MiterJoin}, 64, 64); !ok {
 		t.Error("the stroke produced nothing")
+	}
+}
+
+func TestADiscIsSteppedFinelyEnoughAndNoFiner(t *testing.T) {
+	// How many flats a round end is drawn with follows from how big it is: a
+	// small one needs few, a large one more, and past a point more would say
+	// nothing a pixel could show.
+	cases := []struct {
+		name string
+		r    float64
+		want int
+	}{
+		{"smaller than the tolerance itself", 0.001, 8},
+		{"small", 0.05, 8},
+		{"ordinary", 1, 23},
+		{"large", 100, 223},
+		{"past what a pixel can show", 1e6, 512},
+	}
+	for _, c := range cases {
+		if got := discSteps(c.r); got != c.want {
+			t.Errorf("%s: a disc of radius %v got %d flats, want %d", c.name, c.r, got, c.want)
+		}
+	}
+	// Whatever the count, every flat falls within the tolerance of the rim.
+	for _, r := range []float64{0.05, 0.4, 1, 7.5, 100} {
+		n := float64(discSteps(r))
+		if sagitta := r * (1 - math.Cos(math.Pi/n)); sagitta > discTolerance+1e-12 {
+			t.Errorf("a disc of radius %v is %v inside its rim, past %v", r, sagitta, discTolerance)
+		}
 	}
 }
