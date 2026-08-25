@@ -313,16 +313,3 @@ func edgeBounds(edges []edge) (minX, minY, maxX, maxY float64) {
 	}
 	return
 }
-
-// pointBounds returns the bounding box of a point list (len >= 1 assumed).
-func pointBounds(pts []point) (minX, minY, maxX, maxY float64) {
-	minX, minY = math.Inf(1), math.Inf(1)
-	maxX, maxY = math.Inf(-1), math.Inf(-1)
-	for _, pt := range pts {
-		minX = math.Min(minX, pt.x)
-		minY = math.Min(minY, pt.y)
-		maxX = math.Max(maxX, pt.x)
-		maxY = math.Max(maxY, pt.y)
-	}
-	return
-}
