@@ -286,7 +286,7 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 		scale = 2.0
 	}
 
-	vbW, vbH, ok := rootViewport(&root)
+	vbMinX, vbMinY, vbW, vbH, ok := rootViewport(&root)
 	if !ok {
 		return nil, errNoSVG
 	}
@@ -322,7 +322,9 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 	r.collectGradients(&root)
 
 	st := state{
-		m:       matrix{scale, 0, 0, scale, 0, 0},
+		// Scale to device pixels AND translate the viewBox minimum to the origin,
+		// so a viewBox like "0 -960 960 960" lands its content on the raster.
+		m:       matrix{scale, 0, 0, scale, -vbMinX * scale, -vbMinY * scale},
 		fill:    ink,
 		paint:   true,
 		strokeW: 1, // the SVG default
@@ -339,21 +341,24 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 	}, nil
 }
 
-// rootViewport determines the SVG user-space dimensions from viewBox (preferred)
-// or width/height. The viewBox minimum is assumed to be 0 0.
-func rootViewport(root *xnode) (float64, float64, bool) {
+// rootViewport determines the SVG user-space origin (minX, minY) and dimensions
+// (w, h) from viewBox (preferred) or width/height. A viewBox may carry a
+// non-zero — even negative — minimum (e.g. "0 -960 960 960", common in
+// Material-style icon sets); the caller translates by (-minX, -minY) so that
+// content lands on the raster instead of off it.
+func rootViewport(root *xnode) (minX, minY, w, h float64, ok bool) {
 	if vb, ok := root.attr("viewBox"); ok {
 		f := parseFloats(vb)
 		if len(f) == 4 && f[2] > 0 && f[3] > 0 {
-			return f[2], f[3], true
+			return f[0], f[1], f[2], f[3], true
 		}
 	}
-	w := parseLen(root.attrOr("width", ""), 0)
-	h := parseLen(root.attrOr("height", ""), 0)
+	w = parseLen(root.attrOr("width", ""), 0)
+	h = parseLen(root.attrOr("height", ""), 0)
 	if w > 0 && h > 0 {
-		return w, h, true
+		return 0, 0, w, h, true
 	}
-	return 0, 0, false
+	return 0, 0, 0, 0, false
 }
 
 // render walks one element, deriving a child state and drawing leaf shapes.

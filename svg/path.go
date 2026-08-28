@@ -7,6 +7,7 @@
 package svg
 
 import (
+	"math"
 	"strconv"
 
 	"github.com/go-gfx/gfx/vector"
@@ -65,6 +66,7 @@ func (p *pathScanner) number() float64 {
 		p.i++
 	}
 	seenDigit := false
+	seenDot := false
 	for p.i < len(p.s) {
 		c := p.s[p.i]
 		if c >= '0' && c <= '9' {
@@ -73,6 +75,12 @@ func (p *pathScanner) number() float64 {
 			continue
 		}
 		if c == '.' {
+			// Only one decimal point per number: a second dot begins the NEXT
+			// number, as in the compact SVG "1.4.1" (two coordinates 1.4 and .1).
+			if seenDot {
+				break
+			}
+			seenDot = true
 			p.i++
 			continue
 		}
@@ -95,6 +103,114 @@ func (p *pathScanner) number() float64 {
 		return 0
 	}
 	return v
+}
+
+// flag parses a single arc flag: exactly one '0' or '1', which SVG allows to run
+// straight into the next number with no separator ("0 1 5,5", "0110 20"). On
+// anything else it sets bad.
+func (p *pathScanner) flag() float64 {
+	p.skipSep()
+	if p.i < len(p.s) && (p.s[p.i] == '0' || p.s[p.i] == '1') {
+		v := float64(p.s[p.i] - '0')
+		p.i++
+		return v
+	}
+	p.bad = true
+	return 0
+}
+
+// arcToCubics converts one SVG elliptical-arc segment (endpoint parameterisation:
+// from (x1,y1) to (x2,y2), radii rx/ry, x-axis rotation phiDeg in degrees, the
+// large-arc and sweep flags) into a series of cubic Béziers, each spanning at
+// most a quarter turn — the standard approximation. Coordinates are in user
+// space; the caller applies its transform. A degenerate arc (zero radius or
+// coincident endpoints) yields no segments, so the subpath just skips it.
+func arcToCubics(x1, y1, rx, ry, phiDeg float64, largeArc, sweep bool, x2, y2 float64) [][6]float64 {
+	if rx == 0 || ry == 0 || (x1 == x2 && y1 == y2) {
+		return nil
+	}
+	rx, ry = math.Abs(rx), math.Abs(ry)
+	phi := phiDeg * math.Pi / 180
+	cosP, sinP := math.Cos(phi), math.Sin(phi)
+
+	// Step 1: (x1', y1') in the rotated frame.
+	dx, dy := (x1-x2)/2, (y1-y2)/2
+	x1p := cosP*dx + sinP*dy
+	y1p := -sinP*dx + cosP*dy
+
+	// Correct out-of-range radii.
+	if lam := x1p*x1p/(rx*rx) + y1p*y1p/(ry*ry); lam > 1 {
+		s := math.Sqrt(lam)
+		rx, ry = rx*s, ry*s
+	}
+
+	// Step 2: centre in the rotated frame.
+	num := rx*rx*ry*ry - rx*rx*y1p*y1p - ry*ry*x1p*x1p
+	den := rx*rx*y1p*y1p + ry*ry*x1p*x1p
+	co := 0.0
+	if den != 0 {
+		co = math.Sqrt(math.Max(0, num/den))
+	}
+	if largeArc == sweep {
+		co = -co
+	}
+	cxp := co * rx * y1p / ry
+	cyp := -co * ry * x1p / rx
+
+	// Centre in user space.
+	cx := cosP*cxp - sinP*cyp + (x1+x2)/2
+	cy := sinP*cxp + cosP*cyp + (y1+y2)/2
+
+	ang := func(ux, uy, vx, vy float64) float64 {
+		d := ux*vx + uy*vy
+		// The vectors here run from the ellipse centre to points ON the ellipse
+		// (radii already non-zero), so their lengths are positive — no zero-length
+		// guard is needed.
+		l := math.Hypot(ux, uy) * math.Hypot(vx, vy)
+		a := math.Acos(math.Max(-1, math.Min(1, d/l)))
+		if ux*vy-uy*vx < 0 {
+			a = -a
+		}
+		return a
+	}
+	theta1 := ang(1, 0, (x1p-cxp)/rx, (y1p-cyp)/ry)
+	dtheta := ang((x1p-cxp)/rx, (y1p-cyp)/ry, (-x1p-cxp)/rx, (-y1p-cyp)/ry)
+	if !sweep && dtheta > 0 {
+		dtheta -= 2 * math.Pi
+	}
+	if sweep && dtheta < 0 {
+		dtheta += 2 * math.Pi
+	}
+
+	// At least one Bézier segment: the endpoints differ and the radii are
+	// non-zero (both guarded above), so the swept angle is non-zero and the
+	// quarter-turn ceiling is at least 1.
+	n := int(math.Ceil(math.Abs(dtheta) / (math.Pi / 2)))
+	delta := dtheta / float64(n)
+	tan := 4.0 / 3.0 * math.Tan(delta/4)
+
+	pt := func(th float64) (float64, float64) {
+		ex, ey := rx*math.Cos(th), ry*math.Sin(th)
+		return cosP*ex - sinP*ey + cx, sinP*ex + cosP*ey + cy
+	}
+	rot := func(a, b float64) (float64, float64) { return cosP*a - sinP*b, sinP*a + cosP*b }
+
+	var segs [][6]float64
+	th := theta1
+	for i := 0; i < n; i++ {
+		th2 := th + delta
+		xi, yi := pt(th)
+		xe, ye := pt(th2)
+		tix, tiy := rot(-rx*math.Sin(th), ry*math.Cos(th))
+		tex, tey := rot(-rx*math.Sin(th2), ry*math.Cos(th2))
+		segs = append(segs, [6]float64{
+			xi + tan*tix, yi + tan*tiy,
+			xe - tan*tex, ye - tan*tey,
+			xe, ye,
+		})
+		th = th2
+	}
+	return segs
 }
 
 // more reports whether the next non-separator byte can begin a number, marking a
@@ -164,9 +280,6 @@ func buildPath(d string, m matrix) (*vector.Path, bool) {
 		}
 		if cmd == 0 {
 			break
-		}
-		if cmd == 'A' || cmd == 'a' {
-			return nil, false // arcs unsupported
 		}
 		abs := cmd >= 'A' && cmd <= 'Z'
 
@@ -360,6 +473,33 @@ func buildPath(d string, m matrix) (*vector.Path, bool) {
 				prevQX, prevQY = cx, cy
 				curX, curY = x, y
 				prevCmd = 'T'
+				if !sc.more() {
+					break
+				}
+			}
+		case 'A':
+			if !hasStart {
+				return nil, false
+			}
+			for {
+				rx := sc.number()
+				ry := sc.number()
+				rot := sc.number()
+				large := sc.flag()
+				sweep := sc.flag()
+				x := sc.number()
+				y := sc.number()
+				if sc.bad {
+					return nil, false
+				}
+				if !abs {
+					x += curX
+					y += curY
+				}
+				for _, s := range arcToCubics(curX, curY, rx, ry, rot, large != 0, sweep != 0, x, y) {
+					cubicTo(s[0], s[1], s[2], s[3], s[4], s[5])
+				}
+				curX, curY = x, y
 				if !sc.more() {
 					break
 				}
