@@ -23,6 +23,7 @@
 //	BMP     golang.org/x/image/bmp                     golang.org/x/image
 //	ICO     github.com/sergeymakinen/go-ico            github.com/sergeymakinen/go-ico
 //	ICNS    image/png (per embedded PNG representation)  standard library  [see icns.go]
+//	JP2     github.com/ajroetker/go-jpeg2000           github.com/ajroetker/go-jpeg2000
 //
 // ICNS is the single format with no clean pure-Go decode reference (see the
 // verdict in icns.go): its container is demuxed here by a bounds-checked TLV
@@ -47,6 +48,7 @@ import (
 	"image/png"
 	"io"
 
+	jpeg2000 "github.com/ajroetker/go-jpeg2000"
 	"github.com/go-gfx/gfx/raster"
 	ico "github.com/sergeymakinen/go-ico"
 	"golang.org/x/image/bmp"
@@ -71,6 +73,7 @@ const (
 	ICNS
 	PNM // Netpbm: PBM/PGM/PPM, ASCII (P1–P3) and binary (P4–P6)
 	QOI // Quite OK Image
+	JP2 // JPEG 2000: the JP2 container and the bare codestream alike
 )
 
 // String returns the format's short uppercase name (e.g. "PNG"), or "unknown".
@@ -96,6 +99,8 @@ func (f Format) String() string {
 		return "PNM"
 	case QOI:
 		return "QOI"
+	case JP2:
+		return "JP2"
 	default:
 		return "unknown"
 	}
@@ -128,6 +133,14 @@ func Sniff(data []byte) Format {
 		return ICNS
 	case len(data) >= 4 && string(data[:4]) == "qoif":
 		return QOI
+	// JPEG 2000 arrives two ways. A JP2 file opens with the twelve-byte
+	// signature box; a PDF's /JPXDecode stream is often the bare codestream,
+	// which opens with SOC immediately followed by SIZ. Both are the same
+	// picture and the same decoder.
+	case len(data) >= 12 && string(data[:12]) == "\x00\x00\x00\x0cjP  \r\n\x87\n":
+		return JP2
+	case len(data) >= 4 && data[0] == 0xFF && data[1] == 0x4F && data[2] == 0xFF && data[3] == 0x51:
+		return JP2
 	case len(data) >= 2 && data[0] == 'P' && data[1] >= '1' && data[1] <= '6':
 		return PNM
 	default:
@@ -172,6 +185,8 @@ func DecodeBest(data []byte, targetSize int) (*raster.Image, error) {
 		return decodePNM(data)
 	case QOI:
 		return decodeQOI(data)
+	case JP2:
+		return decodeSingle(jpeg2000.Decode, data)
 	default:
 		return nil, ErrUnknownFormat
 	}
