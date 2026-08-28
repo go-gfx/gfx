@@ -24,6 +24,7 @@
 //	ICO     github.com/sergeymakinen/go-ico            github.com/sergeymakinen/go-ico
 //	ICNS    image/png (per embedded PNG representation)  standard library  [see icns.go]
 //	JP2     github.com/ajroetker/go-jpeg2000           github.com/ajroetker/go-jpeg2000
+//	JBIG2   github.com/dkrisman/gobig2                 github.com/dkrisman/gobig2
 //
 // ICNS is the single format with no clean pure-Go decode reference (see the
 // verdict in icns.go): its container is demuxed here by a bounds-checked TLV
@@ -48,6 +49,8 @@ import (
 	"image/png"
 	"io"
 
+	"github.com/dkrisman/gobig2"
+
 	jpeg2000 "github.com/ajroetker/go-jpeg2000"
 	"github.com/go-gfx/gfx/raster"
 	ico "github.com/sergeymakinen/go-ico"
@@ -71,9 +74,10 @@ const (
 	BMP
 	ICO
 	ICNS
-	PNM // Netpbm: PBM/PGM/PPM, ASCII (P1–P3) and binary (P4–P6)
-	QOI // Quite OK Image
-	JP2 // JPEG 2000: the JP2 container and the bare codestream alike
+	PNM   // Netpbm: PBM/PGM/PPM, ASCII (P1–P3) and binary (P4–P6)
+	QOI   // Quite OK Image
+	JP2   // JPEG 2000: the JP2 container and the bare codestream alike
+	JBIG2 // JBIG2: the bitonal ink layer of a scanned page
 )
 
 // String returns the format's short uppercase name (e.g. "PNG"), or "unknown".
@@ -101,6 +105,8 @@ func (f Format) String() string {
 		return "QOI"
 	case JP2:
 		return "JP2"
+	case JBIG2:
+		return "JBIG2"
 	default:
 		return "unknown"
 	}
@@ -141,6 +147,12 @@ func Sniff(data []byte) Format {
 		return JP2
 	case len(data) >= 4 && data[0] == 0xFF && data[1] == 0x4F && data[2] == 0xFF && data[3] == 0x51:
 		return JP2
+	// A JBIG2 FILE opens with this identifier. A PDF's /JBIG2Decode stream is
+	// the headerless embedded form, which carries no signature at all and so
+	// cannot be sniffed: a PDF consumer knows the format from the dictionary
+	// and decodes it there.
+	case len(data) >= 8 && string(data[:8]) == "\x97JB2\r\n\x1a\n":
+		return JBIG2
 	case len(data) >= 2 && data[0] == 'P' && data[1] >= '1' && data[1] <= '6':
 		return PNM
 	default:
@@ -187,6 +199,8 @@ func DecodeBest(data []byte, targetSize int) (*raster.Image, error) {
 		return decodeQOI(data)
 	case JP2:
 		return decodeSingle(jpeg2000.Decode, data)
+	case JBIG2:
+		return decodeSingle(gobig2.Decode, data)
 	default:
 		return nil, ErrUnknownFormat
 	}
