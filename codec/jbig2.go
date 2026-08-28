@@ -8,8 +8,8 @@ package codec
 import (
 	"bytes"
 
-	"github.com/dkrisman/gobig2"
 	"github.com/go-gfx/gfx/raster"
+	"github.com/tannevaled/gobig2"
 )
 
 // DecodeEmbeddedJBIG2 decodes the headerless form of JBIG2 — segments and
@@ -24,8 +24,14 @@ import (
 // It is here rather than in each container's own reader so that one package
 // names the JBIG2 decoder. That matters more than usual for this format: the
 // reference decoder's resource limits are process-global rather than
-// per-decode, and it publishes no tagged version, so the day it is swapped
-// should be a change in one place.
+// per-decode, so the day it is swapped should be a change in one place.
+//
+// The decoder is a fork, which is not the usual arrangement here and is meant
+// to end. Upstream's per-symbol pixel cap defaults below what real scanned
+// documents contain: it refuses 7 of 403 JBIG2 streams taken from public
+// scans, and a library cannot raise it, because the limits are those
+// process-global variables. The fix is offered as dkrisman/gobig2#2 and the
+// fork exists to carry it, tagged, until it lands.
 //
 // globals may be nil, which is the common case: an encoder that puts a page's
 // symbol dictionary in the page's own stream needs no shared segments.
