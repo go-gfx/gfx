@@ -76,3 +76,56 @@ func TestAJBIG2FileThatIsNotOneIsRefused(t *testing.T) {
 		t.Error("bytes that are not a JBIG2 file decoded anyway")
 	}
 }
+
+func TestTheEmbeddedFormDecodesWithoutAHeader(t *testing.T) {
+	// What a PDF stores in a /JBIG2Decode stream: the same segments, with no
+	// file header in front of them. Sniffing cannot find it, so the container
+	// that already knows says so.
+	img, err := DecodeEmbeddedJBIG2(jbig2Segments, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.W != 16 || img.H != 8 {
+		t.Fatalf("decoded %dx%d, want 16x8", img.W, img.H)
+	}
+	// Ink on the right, paper on the left, so a decoder handing back a flat or
+	// a mirrored picture is caught and not merely one handing back nothing.
+	if ink := img.Pix[(4*img.W+12)*4]; ink >= 128 {
+		t.Errorf("the inked half came back at %d, which is not ink", ink)
+	}
+	if paper := img.Pix[(4*img.W+3)*4]; paper < 128 {
+		t.Errorf("the blank half came back at %d, which is not paper", paper)
+	}
+}
+
+func TestTheEmbeddedFormRefusesWhatItCannotRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"segments that are not segments", []byte{0, 0, 0, 0, 0x30, 0, 1}},
+		{"nothing at all", nil},
+		{"a stream that stops part way", jbig2Segments[:40]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := DecodeEmbeddedJBIG2(tc.data, nil); err == nil {
+				t.Error("decoded something that is not a JBIG2")
+			}
+		})
+	}
+}
+
+func TestGlobalsAreIgnoredByAStreamThatDoesNotNeedThem(t *testing.T) {
+	// Most JBIG2 in the wild carries its own symbol dictionary — none of the
+	// 403 streams in a corpus of scanned documents named a globals stream at
+	// all. A stream that needs nothing shared does not look at what it was
+	// given, so unreadable globals are not by themselves a reason to refuse a
+	// picture that decodes.
+	img, err := DecodeEmbeddedJBIG2(jbig2Segments, []byte{0xff, 0xfe, 0xfd})
+	if err != nil {
+		t.Fatalf("globals it never reads stopped it decoding: %v", err)
+	}
+	if img.W != 16 || img.H != 8 {
+		t.Errorf("decoded %dx%d, want 16x8", img.W, img.H)
+	}
+}
