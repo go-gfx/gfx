@@ -24,7 +24,7 @@
 //	ICO     github.com/sergeymakinen/go-ico            github.com/sergeymakinen/go-ico
 //	ICNS    image/png (per embedded PNG representation)  standard library  [see icns.go]
 //	JP2     github.com/ajroetker/go-jpeg2000           github.com/ajroetker/go-jpeg2000
-//	JBIG2   github.com/dkrisman/gobig2                 github.com/dkrisman/gobig2
+//	JBIG2   github.com/tannevaled/gobig2 [fork]         github.com/tannevaled/gobig2
 //
 // ICNS is the single format with no clean pure-Go decode reference (see the
 // verdict in icns.go): its container is demuxed here by a bounds-checked TLV
@@ -49,7 +49,7 @@ import (
 	"image/png"
 	"io"
 
-	"github.com/dkrisman/gobig2"
+	"github.com/tannevaled/gobig2"
 
 	jpeg2000 "github.com/ajroetker/go-jpeg2000"
 	"github.com/go-gfx/gfx/raster"
