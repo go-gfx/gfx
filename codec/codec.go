@@ -8,6 +8,10 @@
 // appropriate REFERENCE decoder, returning the shared [raster.Image] substrate
 // the rest of go-gfx consumes.
 //
+// It writes as well as reads, through [Encode], and the two are not
+// symmetric: a reference DECODER exists in pure Go for every format below, a
+// reference encoder for five of them. [CanEncode] says which.
+//
 // It reimplements NO decoder. Every format is handed to a battle-tested pure-Go
 // (CGO-free) reference library, and this package only sniffs the format,
 // delegates, and converts the reference's image.Image into a straight-alpha
