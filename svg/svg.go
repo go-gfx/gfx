@@ -418,6 +418,10 @@ func (r *renderer) render(n *xnode, parent state) {
 		r.drawRect(n, st)
 	case "circle":
 		r.drawCircle(n, st)
+	case "polygon":
+		r.drawPoly(n, st, true)
+	case "polyline":
+		r.drawPoly(n, st, false)
 	case "image":
 		r.drawImage(n, st)
 	case "svg":
@@ -570,6 +574,36 @@ func (r *renderer) drawCircle(n *xnode, st state) {
 	cube(cx-rr, cy-k*rr, cx-k*rr, cy-rr, cx, cy-rr)
 	cube(cx+k*rr, cy-rr, cx+rr, cy-k*rr, cx+rr, cy)
 	p.Close()
+	r.fillPath(p, st)
+}
+
+// drawPoly fills a <polygon> (closed) or draws a <polyline> (left open) from its
+// "points" list — a flat run of x,y pairs separated by commas and/or whitespace.
+// Fewer than two points draws nothing. Fill and stroke follow the paint state
+// exactly like every other shape (an open polyline with a fill fills as if
+// closed, the SVG rule).
+func (r *renderer) drawPoly(n *xnode, st state, closed bool) {
+	if !st.paint && !st.strokeOn {
+		return
+	}
+	pts, ok := n.attr("points")
+	if !ok {
+		return
+	}
+	f := parseFloats(pts)
+	if len(f) < 4 {
+		return
+	}
+	p := vector.NewPath()
+	x0, y0 := st.m.apply(f[0], f[1])
+	p.MoveTo(x0, y0)
+	for i := 2; i+1 < len(f); i += 2 {
+		x, y := st.m.apply(f[i], f[i+1])
+		p.LineTo(x, y)
+	}
+	if closed {
+		p.Close()
+	}
 	r.fillPath(p, st)
 }
 

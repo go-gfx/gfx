@@ -449,6 +449,51 @@ func TestCircle(t *testing.T) {
 	}
 }
 
+func TestPolygon(t *testing.T) {
+	// A filled triangle: an interior point is painted.
+	doc := `<svg viewBox="0 0 20 20"><polygon points="10,2 18,18 2,18" fill="black"/></svg>`
+	p, err := Rasterize(doc, Options{Scale: 2, Ink: black, Paper: white})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// user (10,13) is well inside the triangle -> device (20,26) at scale 2.
+	if pixAt(p, 20, 26).R > 100 {
+		t.Errorf("polygon interior not painted: %v", pixAt(p, 20, 26))
+	}
+	// A stroked polyline (no fill): a point on the top segment is painted.
+	doc2 := `<svg viewBox="0 0 20 20"><polyline points="2,4 18,4" fill="none" stroke="black" stroke-width="2"/></svg>`
+	p2, err := Rasterize(doc2, Options{Scale: 2, Ink: black, Paper: white})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pixAt(p2, 20, 8).R > 100 {
+		t.Errorf("polyline stroke not painted: %v", pixAt(p2, 20, 8))
+	}
+	// fill=none polygon paints nothing.
+	doc3 := `<svg viewBox="0 0 20 20"><polygon points="10,2 18,18 2,18" fill="none"/></svg>`
+	p3, err := Rasterize(doc3, Options{Scale: 2, Paper: white})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pixAt(p3, 20, 26) != white {
+		t.Fatalf("fill=none polygon painted: %v", pixAt(p3, 20, 26))
+	}
+}
+
+func TestPolyEdgeCases(t *testing.T) {
+	// No "points", too few points (a single coordinate pair), and an empty points
+	// string: all paint nothing and must not panic.
+	for _, d := range []string{
+		`<svg viewBox="0 0 10 10"><polygon fill="black"/></svg>`,
+		`<svg viewBox="0 0 10 10"><polygon points="1,1" fill="black"/></svg>`,
+		`<svg viewBox="0 0 10 10"><polyline points="" stroke="black" stroke-width="1"/></svg>`,
+	} {
+		if _, err := Rasterize(d, Options{Scale: 2, Paper: white}); err != nil {
+			t.Fatalf("Rasterize(%q): %v", d, err)
+		}
+	}
+}
+
 func TestEmbeddedImage(t *testing.T) {
 	// Build a 2x2 image: opaque red and a half-transparent pixel.
 	src := image.NewNRGBA(image.Rect(0, 0, 2, 2))
