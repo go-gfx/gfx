@@ -252,3 +252,60 @@ func buildRoundRect(p *vector.Path, x, y, w, h, rx, ry float64, m matrix) {
 	cube(x, y+ry-cy, x+rx-cx, y, x+rx, y)
 	p.Close()
 }
+
+// parseOpacity reads a fill-opacity or stroke-opacity value: a number, or a
+// percentage — resvg's own conformance corpus carries fill-opacity="50%", so the
+// percentage form is not optional. Out-of-range values clamp rather than fail,
+// as CSS requires; anything unparsable leaves the inherited value alone.
+func parseOpacity(v string, inherit float64) float64 {
+	t := strings.TrimSpace(v)
+	pct := strings.HasSuffix(t, "%")
+	f, err := strconv.ParseFloat(strings.TrimSuffix(t, "%"), 64)
+	if err != nil {
+		return inherit
+	}
+	if pct {
+		f /= 100
+	}
+	switch {
+	case f < 0:
+		return 0
+	case f > 1:
+		return 1
+	}
+	return f
+}
+
+// parseDashArray reads stroke-dasharray, in user units.
+//
+// The guards are the ones the reference corpus pins rather than ones invented
+// here: a NEGATIVE value makes the whole list an error ("technically undefined",
+// says resvg's own fixture) and a list summing to zero or less draws a solid
+// line. "none", an empty value and anything unparsable are likewise solid. An
+// odd count is left alone — the stroker already repeats it to become even.
+func parseDashArray(v string, ref float64) []float64 {
+	t := strings.TrimSpace(v)
+	if t == "" || t == "none" {
+		return nil
+	}
+	fields := strings.FieldsFunc(t, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+	if len(fields) == 0 {
+		return nil
+	}
+	out := make([]float64, 0, len(fields))
+	sum := 0.0
+	for _, f := range fields {
+		n := parseLen(f, ref)
+		if n < 0 {
+			return nil
+		}
+		sum += n
+		out = append(out, n)
+	}
+	if sum <= 0 {
+		return nil
+	}
+	return out
+}

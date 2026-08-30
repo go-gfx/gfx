@@ -9,8 +9,14 @@ import (
 	"testing"
 )
 
+// strokedDoc is a DIAGONAL stroke, deliberately. It used to be the horizontal
+// "M4 12 L20 12", which at these whole-number coordinates and an integer scale
+// covers whole pixels exactly: with the SVG-initial butt cap it produces no
+// partial coverage at all, and the anti-aliasing assertion below only held
+// because the renderer was forcing round caps. A diagonal has off-grid edges
+// whatever the cap, so it tests the rasteriser rather than the cap style.
 const strokedDoc = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-<path d="M4 12 L20 12" stroke="currentColor" stroke-width="2" fill="none"/></svg>`
+<path d="M4 5 L20 19" stroke="currentColor" stroke-width="2" fill="none"/></svg>`
 
 // TestAMaskIsCoverageAndNothingElse covers the whole point of the mask: the
 // shape is kept and the colour is left to whoever paints it. An icon is drawn
