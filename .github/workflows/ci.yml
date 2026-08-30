@@ -120,7 +120,7 @@ jobs:
           # to 'stable' and delete this comment. Verified against that CL --
           # its parent still fails TestSkimageLabToRGBOutOfGamut with
           # [184 0 255], and the whole package passes with it.
-          go-version: '1.26.4'
+          go-version: '1.27.0'
       - run: sudo apt-get update && sudo apt-get install -y qemu-user-static
       - name: Test under qemu (${{ matrix.goarch }})
         run: GOARCH=${{ matrix.goarch }} go test -exec=${{ matrix.qemu }} ./...
