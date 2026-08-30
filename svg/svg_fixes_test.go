@@ -7,6 +7,7 @@
 package svg
 
 import (
+	"fmt"
 	"image/color"
 	"testing"
 )
@@ -126,5 +127,78 @@ func TestArcWithoutMoveSkipped(t *testing.T) {
 	}
 	if inkedPixels(p) != 0 {
 		t.Fatal("an arc with no preceding move should paint nothing")
+	}
+}
+
+// opaquePixels counts pixels that are all but fully painted, which is what
+// separates a filled interior from an anti-aliased outline.
+func opaquePixels(p *Result) int {
+	n := 0
+	for i := 3; i < len(p.Image.Pix); i += 4 {
+		if p.Image.Pix[i] > 200 {
+			n++
+		}
+	}
+	return n
+}
+
+// TestRootPresentationAttributesInherit: the root <svg> carries presentation
+// attributes like any other element, and everything inside inherits them.
+//
+// Rasterize walks the root's CHILDREN, so for a while it never read the root's
+// own attributes. Stroke-based icon packs put fill="none" on the root and
+// stroke="currentColor" on each path; with the root's fill dropped, every closed
+// path inherited the default fill and a magnifier rendered as a solid disc. The
+// open handle path still stroked correctly, so the result looked deliberate
+// rather than broken.
+func TestRootPresentationAttributesInherit(t *testing.T) {
+	// A ring: one closed path, stroked, with the paint state declared only on
+	// the root — exactly the shape an icon pack ships.
+	const ring = `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">` +
+		`<path d="M3 12C3 16.9706 7.02944 21 12 21C16.9706 21 21 16.9706 21 12C21 7.02944 16.9706 3 12 3C7.02944 3 3 7.02944 3 12Z" stroke="currentColor"/>` +
+		`</svg>`
+	got, err := Rasterize(ring, Options{Scale: 8, Ink: color.RGBA{A: 255}})
+	if err != nil {
+		t.Fatalf("Rasterize: %v", err)
+	}
+	if opaquePixels(got) == 0 {
+		t.Fatal("the ring painted nothing at all")
+	}
+
+	// The same ring with the root's fill="none" removed, which is what the
+	// renderer used to see. That one IS filled, and the contrast is the test:
+	// comparing against a fraction of the canvas would only pin today's
+	// anti-aliasing, while comparing the two answers pins the inheritance.
+	const filled = `<svg viewBox="0 0 24 24" stroke-width="1.5">` +
+		`<path d="M3 12C3 16.9706 7.02944 21 12 21C16.9706 21 21 16.9706 21 12C21 7.02944 16.9706 3 12 3C7.02944 3 3 7.02944 3 12Z" stroke="currentColor"/>` +
+		`</svg>`
+	ref, err := Rasterize(filled, Options{Scale: 8, Ink: color.RGBA{A: 255}})
+	if err != nil {
+		t.Fatalf("Rasterize: %v", err)
+	}
+	outline, disc := opaquePixels(got), opaquePixels(ref)
+	if outline*2 >= disc {
+		t.Errorf("root fill=\"none\" was not inherited: outline covers %d px, a filled disc %d — an outline must be a small fraction of the area it encloses",
+			outline, disc)
+	}
+}
+
+// TestRootStrokeWidthInherits: the root's stroke-width reaches a child that does
+// not set one of its own. A pack that declares the width once, on the root, is
+// otherwise drawn at the default weight.
+func TestRootStrokeWidthInherits(t *testing.T) {
+	const tmpl = `<svg viewBox="0 0 24 24" fill="none" stroke-width="%s">` +
+		`<path d="M2 12H22" stroke="currentColor"/></svg>`
+	thin, err := Rasterize(fmt.Sprintf(tmpl, "1"), Options{Scale: 8, Ink: color.RGBA{A: 255}})
+	if err != nil {
+		t.Fatalf("Rasterize: %v", err)
+	}
+	thick, err := Rasterize(fmt.Sprintf(tmpl, "6"), Options{Scale: 8, Ink: color.RGBA{A: 255}})
+	if err != nil {
+		t.Fatalf("Rasterize: %v", err)
+	}
+	if opaquePixels(thick) <= opaquePixels(thin) {
+		t.Errorf("root stroke-width was not inherited: width 6 inked %d px, width 1 inked %d",
+			opaquePixels(thick), opaquePixels(thin))
 	}
 }
