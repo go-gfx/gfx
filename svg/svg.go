@@ -331,6 +331,9 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 		vpW:     vbW,
 		vpH:     vbH,
 	}
+	// The root <svg> carries presentation attributes like any other element, and
+	// they are inherited by everything inside it.
+	st = r.applyPaintAttrs(&root, st)
 	for i := range root.Children {
 		r.render(&root.Children[i], st)
 	}
@@ -376,21 +379,23 @@ var notRendered = map[string]bool{
 	"symbol": true, "marker": true, "pattern": true,
 }
 
-func (r *renderer) render(n *xnode, parent state) {
-	if notRendered[n.XMLName.Local] {
-		return
-	}
-	st := parent
-
-	if v, ok := n.attr("transform"); ok {
-		st.m = parent.m.mul(parseTransform(v))
-	}
+// applyPaintAttrs folds an element's presentation attributes into the inherited
+// state. It is separate from render because the ROOT <svg> needs it too, and the
+// root is not rendered: Rasterize walks its children.
+//
+// That gap silently changed what an icon pack looks like. Iconoir puts
+// fill="none" and stroke-width="1.5" on the root and stroke="currentColor" on
+// each path, so with the root's attributes dropped every closed path inherited
+// the default fill and a magnifier came out as a solid disc — 40% of the box
+// inked instead of a thin outline — while the open handle path still stroked
+// correctly and made the result look deliberate.
+func (r *renderer) applyPaintAttrs(n *xnode, st state) state {
 	if v, ok := n.attr("fill"); ok {
-		st.fill, st.paint, st.fillRef = resolveFill(v, parent.fill, parent.paint, r.ink, r.paper)
+		st.fill, st.paint, st.fillRef = resolveFill(v, st.fill, st.paint, r.ink, r.paper)
 		st.paint = st.paint && r.paintExists(st.fillRef)
 	}
 	if v, ok := n.attr("stroke"); ok {
-		st.stroke, st.strokeOn, st.strokeRef = resolveFill(v, parent.stroke, parent.strokeOn, r.ink, r.paper)
+		st.stroke, st.strokeOn, st.strokeRef = resolveFill(v, st.stroke, st.strokeOn, r.ink, r.paper)
 		st.strokeOn = st.strokeOn && r.paintExists(st.strokeRef)
 	}
 	if v, ok := n.attr("stroke-width"); ok {
@@ -400,6 +405,19 @@ func (r *renderer) render(n *xnode, parent state) {
 		// that a malformed shape is skipped rather than guessed at.
 		st.strokeW = parseLen(v, st.vpW)
 	}
+	return st
+}
+
+func (r *renderer) render(n *xnode, parent state) {
+	if notRendered[n.XMLName.Local] {
+		return
+	}
+	st := parent
+
+	if v, ok := n.attr("transform"); ok {
+		st.m = parent.m.mul(parseTransform(v))
+	}
+	st = r.applyPaintAttrs(n, st)
 	if n.XMLName.Local == "g" {
 		idx := len(r.groups)
 		r.groups = append(r.groups, Group{Attrs: n.attrMap()})
