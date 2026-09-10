@@ -52,13 +52,13 @@ func TestLinearGradientObjectBoundingBox(t *testing.T) {
 	</svg>`)
 	left, right := res.at(1, 20), res.at(38, 20)
 	if left.R < 200 || left.B > 60 {
-		t.Errorf("bord gauche = %v, attendu proche du rouge", left)
+		t.Errorf("left edge = %v, want close to red", left)
 	}
 	if right.B < 200 || right.R > 60 {
-		t.Errorf("bord droit = %v, attendu proche du bleu", right)
+		t.Errorf("right edge = %v, want close to blue", right)
 	}
 	if n := res.colours(); n < 10 {
-		t.Errorf("%d couleurs — un dégradé devrait en produire beaucoup plus", n)
+		t.Errorf("%d colours; a gradient should produce many more", n)
 	}
 }
 
@@ -74,7 +74,7 @@ func TestLinearGradientUserSpaceOnUse(t *testing.T) {
 	// The rect covers the RIGHT half of user space, so it only shows the far end
 	// of the gradient: no red anywhere in it.
 	if c := res.at(21, 20); c.R > 160 {
-		t.Errorf("bord gauche du rectangle = %v — le dégradé ne devrait pas repartir du rouge", c)
+		t.Errorf("left edge of the rectangle = %v; the gradient should not restart from red", c)
 	}
 }
 
@@ -87,10 +87,10 @@ func TestRadialGradient(t *testing.T) {
 	</svg>`)
 	mid, corner := res.at(20, 20), res.at(1, 1)
 	if mid.R < 200 {
-		t.Errorf("centre = %v, attendu clair", mid)
+		t.Errorf("centre = %v, want light", mid)
 	}
 	if corner.R > 80 {
-		t.Errorf("coin = %v, attendu sombre", corner)
+		t.Errorf("corner = %v, want dark", corner)
 	}
 }
 
@@ -100,15 +100,15 @@ func TestGradientStopForms(t *testing.T) {
 	  <defs><linearGradient id="g" x1="0" y1="0" x2="100%" y2="0">
 	    <stop offset="0%" stop-color="black"/>
 	    <stop offset="50%" stop-color="white" stop-opacity="1"/>
-	    <stop offset="100%" stop-color="pas-une-couleur"/>
+	    <stop offset="100%" stop-color="not-a-colour"/>
 	  </linearGradient></defs>
 	  <rect width="40" height="40" fill="url(#g)"/>
 	</svg>`)
 	if res.at(1, 20).R > 60 {
-		t.Errorf("début = %v, attendu noir", res.at(1, 20))
+		t.Errorf("start = %v, want black", res.at(1, 20))
 	}
 	if res.at(20, 20).R < 180 {
-		t.Errorf("milieu = %v, attendu blanc", res.at(20, 20))
+		t.Errorf("middle = %v, want white", res.at(20, 20))
 	}
 }
 
@@ -120,7 +120,7 @@ func TestGradientWithoutStops(t *testing.T) {
 	  <rect width="10" height="10" fill="url(#g)"/>
 	</svg>`)
 	if c := res.at(5, 5); c.A != 255 {
-		t.Errorf("centre = %v, attendu peint à plat", c)
+		t.Errorf("centre = %v, want a flat fill", c)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestUnresolvedPaintDoesNotFloodWithBlack(t *testing.T) {
 	for _, fill := range []string{"url(#absent)", "rgb(1,2,3)", "chartreuse"} {
 		res := rasterise(t, `<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="`+fill+`"/></svg>`)
 		if c := res.at(5, 5); c.A != 0 {
-			t.Errorf("fill=%q → %v, attendu transparent", fill, c)
+			t.Errorf("fill=%q gave %v, want transparent", fill, c)
 		}
 	}
 }
@@ -152,7 +152,7 @@ func TestParsePaintRef(t *testing.T) {
 	} {
 		got, ok := parsePaintRef(c.in)
 		if got != c.want || ok != c.ok {
-			t.Errorf("parsePaintRef(%q) = (%q, %v), attendu (%q, %v)", c.in, got, ok, c.want, c.ok)
+			t.Errorf("parsePaintRef(%q) = (%q, %v), want (%q, %v)", c.in, got, ok, c.want, c.ok)
 		}
 	}
 }
@@ -168,10 +168,10 @@ func TestStrokeOnlyPath(t *testing.T) {
 	  </g>
 	</svg>`)
 	if c := res.at(20, 20); c.R != 255 || c.A != 255 {
-		t.Errorf("sur le trait = %v, attendu blanc opaque", c)
+		t.Errorf("on the stroke = %v, want opaque white", c)
 	}
 	if c := res.at(20, 4); c.A != 0 {
-		t.Errorf("hors du trait = %v, attendu transparent", c)
+		t.Errorf("off the stroke = %v, want transparent", c)
 	}
 }
 
@@ -199,7 +199,7 @@ func TestStrokeWidthFollowsTheTransform(t *testing.T) {
 	// count must grow by about that much — not stay put, which is what an
 	// unscaled width would do.
 	if a, b := count(thin.Image.Pix), count(thick.Image.Pix); b < a*8 {
-		t.Errorf("pixels peints: %d à l'échelle 1, %d à l'échelle 4 — la largeur ne suit pas la transformation", a, b)
+		t.Errorf("painted pixels: %d at scale 1, %d at scale 4; the width does not follow the transform", a, b)
 	}
 }
 
@@ -209,10 +209,10 @@ func TestFillAndStroke(t *testing.T) {
 	  <rect x="10" y="10" width="20" height="20" fill="#ff0000" stroke="#0000ff" stroke-width="4"/>
 	</svg>`)
 	if c := res.at(20, 20); c.R < 200 {
-		t.Errorf("intérieur = %v, attendu rouge", c)
+		t.Errorf("interior = %v, want red", c)
 	}
 	if c := res.at(20, 10); c.B < 200 {
-		t.Errorf("bord = %v, attendu bleu", c)
+		t.Errorf("edge = %v, want blue", c)
 	}
 }
 
@@ -220,7 +220,7 @@ func TestStrokeNoneAndZeroWidth(t *testing.T) {
 	for _, g := range []string{`stroke="none" stroke-width="6"`, `stroke="#fff" stroke-width="0"`} {
 		res := rasterise(t, `<svg viewBox="0 0 20 20"><g fill="none" `+g+`><path d="M2 10 H18"/></g></svg>`)
 		if c := res.at(10, 10); c.A != 0 {
-			t.Errorf("%s → %v, attendu rien de peint", g, c)
+			t.Errorf("%s gave %v, want nothing painted", g, c)
 		}
 	}
 }
@@ -233,13 +233,13 @@ func TestStrokeNoneAndZeroWidth(t *testing.T) {
 func TestRectRoundedCorners(t *testing.T) {
 	res := rasterise(t, `<svg viewBox="0 0 40 40"><rect width="40" height="40" rx="12" fill="#ff0000"/></svg>`)
 	if c := res.at(0, 0); c.A != 0 {
-		t.Errorf("coin = %v, attendu hors de la forme", c)
+		t.Errorf("corner = %v, want outside the shape", c)
 	}
 	if c := res.at(20, 0); c.A == 0 {
-		t.Errorf("milieu du bord haut = %v, attendu dans la forme", c)
+		t.Errorf("middle of the top edge = %v, want inside the shape", c)
 	}
 	if c := res.at(20, 20); c.R < 200 {
-		t.Errorf("centre = %v, attendu rouge", c)
+		t.Errorf("centre = %v, want red", c)
 	}
 }
 
@@ -247,25 +247,25 @@ func TestRectRoundedCorners(t *testing.T) {
 func TestRectRadiusFormsAndClamp(t *testing.T) {
 	only := rasterise(t, `<svg viewBox="0 0 40 40"><rect width="40" height="40" ry="12" fill="#ff0000"/></svg>`)
 	if c := only.at(0, 0); c.A != 0 {
-		t.Errorf("ry seul: coin = %v, attendu arrondi", c)
+		t.Errorf("ry alone: corner = %v, want rounded", c)
 	}
 	huge := rasterise(t, `<svg viewBox="0 0 40 40"><rect width="40" height="40" rx="999" fill="#ff0000"/></svg>`)
 	// Clamped to w/2 and h/2, the rect becomes a disc: the centre is filled and
 	// the corner is not.
 	if c := huge.at(20, 20); c.R < 200 {
-		t.Errorf("rx énorme: centre = %v, attendu rempli", c)
+		t.Errorf("huge rx: centre = %v, want filled", c)
 	}
 	if c := huge.at(0, 0); c.A != 0 {
-		t.Errorf("rx énorme: coin = %v, attendu vide", c)
+		t.Errorf("huge rx: corner = %v, want empty", c)
 	}
 }
 
 func TestMatrixScale(t *testing.T) {
 	if got := (matrix{2, 0, 0, 2, 0, 0}).scale(); got != 2 {
-		t.Errorf("scale() = %v, attendu 2", got)
+		t.Errorf("scale() = %v, want 2", got)
 	}
 	if got := (matrix{0, 3, -3, 0, 0, 0}).scale(); got != 3 {
-		t.Errorf("scale() d'une rotation-échelle = %v, attendu 3", got)
+		t.Errorf("scale() of a rotate-and-scale = %v, want 3", got)
 	}
 }
 
@@ -280,11 +280,11 @@ func TestRadialGradientUserSpaceOnUse(t *testing.T) {
 	</svg>`
 	res := rasterise(t, doc)
 	if c := res.at(20, 20); c.R < 200 {
-		t.Errorf("centre = %v, attendu clair", c)
+		t.Errorf("centre = %v, want light", c)
 	}
 	// Ten user units out from the centre is the far stop: dark.
 	if c := res.at(31, 20); c.R > 90 {
-		t.Errorf("bord du disque = %v, attendu sombre", c)
+		t.Errorf("edge of the disc = %v, want dark", c)
 	}
 }
 
@@ -298,7 +298,7 @@ func TestGradientAttributeThatDoesNotParse(t *testing.T) {
 	  <rect width="40" height="40" fill="url(#g)"/>
 	</svg>`)
 	if c := res.at(5, 20); c.A != 255 {
-		t.Errorf("la forme devrait rester peinte: %v", c)
+		t.Errorf("the shape should still be painted: %v", c)
 	}
 }
 
@@ -315,9 +315,9 @@ func TestGradientIgnoresNonStopChildren(t *testing.T) {
 	  <rect width="40" height="40" fill="url(#g)"/>
 	</svg>`)
 	if c := res.at(1, 20); c.R < 200 {
-		t.Errorf("bord gauche = %v, attendu rouge", c)
+		t.Errorf("left edge = %v, want red", c)
 	}
 	if c := res.at(38, 20); c.B < 200 {
-		t.Errorf("bord droit = %v, attendu bleu", c)
+		t.Errorf("right edge = %v, want blue", c)
 	}
 }

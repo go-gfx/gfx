@@ -32,7 +32,7 @@ func TestElementsThatDefineAreNotPainted(t *testing.T) {
 			doc := `<svg xmlns="http://www.w3.org/2000/svg" width="40pt" height="40pt" viewBox="0 0 40 40">` +
 				`<g fill="black"><` + el + ` id="x"><path d="` + bigSquare + `"/></` + el + `></g></svg>`
 			if px := centre(t, doc); px[0] < 200 {
-				t.Errorf("le contenu d'un <%s> a été peint : %v", el, px)
+				t.Errorf("the content of a <%s> was painted: %v", el, px)
 			}
 		})
 	}
@@ -44,7 +44,7 @@ func TestAShapeOutsideThemIsStillPainted(t *testing.T) {
 	doc := `<svg xmlns="http://www.w3.org/2000/svg" width="40pt" height="40pt" viewBox="0 0 40 40">` +
 		`<g fill="black"><path d="` + bigSquare + `"/></g></svg>`
 	if px := centre(t, doc); px[0] > 200 {
-		t.Errorf("une forme ordinaire n'a pas été peinte : %v", px)
+		t.Errorf("an ordinary shape was not painted: %v", px)
 	}
 }
 
@@ -58,6 +58,6 @@ func TestAGradientInDefsStillPaints(t *testing.T) {
 		`<path d="` + bigSquare + `" fill="url(#g1)"/></svg>`
 	px := centre(t, doc)
 	if px[0] < 200 || px[1] > 100 {
-		t.Errorf("le dégradé défini dans <defs> ne peint pas rouge : %v", px)
+		t.Errorf("the gradient defined in <defs> does not paint red: %v", px)
 	}
 }

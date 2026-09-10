@@ -29,10 +29,13 @@ var ErrCannotEncode = fmt.Errorf("codec: no reference encoder for this format")
 // Encode writes an image in the named format.
 //
 // The formats that can be written are PNG, JPEG, GIF, TIFF and BMP, each
-// through the same reference library that reads it. WEBP, ICO, ICNS, PNM, QOI,
-// JP2 and JBIG2 can be read here and not written: they return
-// [ErrCannotEncode] rather than something in another format under the asked-for
-// name.
+// through the same reference library that reads it. WEBP, PNM, QOI, JP2 and
+// JBIG2 can be read here and not written: they return [ErrCannotEncode] rather
+// than something in another format under the asked-for name.
+//
+// ICO and ICNS are written too, but by [EncodeICO] and [EncodeICNS] and not
+// here: each holds several independent representations for a chooser to pick
+// between, and a function taking one image has nowhere to put the others.
 //
 // TIFF is written with Deflate compression and BMP is not written with any,
 // because BMP has none to write: of the five, BMP is the one whose files are
@@ -83,6 +86,14 @@ func CanEncode(f Format) bool {
 		return false
 	}
 }
+
+// pngEncode is how a container gets one representation's bytes. It is a
+// variable rather than a plain call because a container must know a payload's
+// length before it can write the directory that points at it, so it encodes
+// into a buffer — and a buffer never fails, which leaves png.Encode's error
+// return unreachable from every input the encoders accept. A test replaces it
+// to exercise what a container does when a payload will not encode.
+var pngEncode = png.Encode
 
 // nrgba presents the image to an encoder that carries alpha. The pixels are
 // already straight alpha in the same order, so this is a header and not a copy
