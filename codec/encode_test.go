@@ -149,3 +149,74 @@ func TestAPlaceThatWillNotBeWrittenTo(t *testing.T) {
 		}
 	}
 }
+
+// noisy is a picture that does not compress to nothing. Flat colour flatters
+// every encoder equally and would say nothing about which of them compresses.
+func noisy(w, h int) *raster.Image {
+	img := raster.New(w, h)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			i := (y*w + x) * 4
+			v := uint8(255)
+			if (x/3+y/5)%17 == 0 || (x*y)%2003 < 40 {
+				v = uint8((x * y) % 256)
+			}
+			img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = v, v, v, 255
+		}
+	}
+	return img
+}
+
+func TestATIFFIsCompressed(t *testing.T) {
+	// The encoder's default is no compression at all, and nil reads like "no
+	// options" rather than like a choice. On a page-sized picture that is the
+	// difference between eight megabytes and four hundred kilobytes.
+	img := noisy(612, 792)
+	var got bytes.Buffer
+	if err := Encode(&got, img, TIFF); err != nil {
+		t.Fatal(err)
+	}
+	raw := 4 * img.W * img.H // what the pixels weigh uncompressed
+	if got.Len() > raw/4 {
+		t.Errorf("a TIFF of %d pixels came to %d bytes, which is not compressed at all",
+			img.W*img.H, got.Len())
+	}
+	// And it still reads back, which is the half that matters: a smaller file
+	// nothing opens is worse than a large one.
+	back, err := Decode(got.Bytes())
+	if err != nil {
+		t.Fatalf("the compressed TIFF cannot be read back: %v", err)
+	}
+	if back.W != img.W || back.H != img.H {
+		t.Fatalf("it came back %dx%d", back.W, back.H)
+	}
+	// Losslessly: TIFF is not a lossy format, so every pixel is the one that
+	// went in.
+	for i := range img.Pix {
+		if back.Pix[i] != img.Pix[i] {
+			t.Fatalf("pixel byte %d came back %d, want %d", i, back.Pix[i], img.Pix[i])
+		}
+	}
+}
+
+func TestWhichFormatsAreLargeAndStayLarge(t *testing.T) {
+	// BMP has no compression to ask for, and this says so out loud rather than
+	// leaving somebody to discover it on a document of two hundred pages.
+	img := noisy(200, 200)
+	sizes := map[Format]int{}
+	for _, f := range []Format{PNG, TIFF, BMP} {
+		var buf bytes.Buffer
+		if err := Encode(&buf, img, f); err != nil {
+			t.Fatal(err)
+		}
+		sizes[f] = buf.Len()
+	}
+	raw := 4 * img.W * img.H
+	if sizes[BMP] < raw/2 {
+		t.Errorf("BMP came to %d bytes for %d of pixels: it has learned to compress, "+
+			"and what this package says about it is now wrong", sizes[BMP], raw)
+	}
+	if sizes[TIFF] >= sizes[BMP] {
+		t.Errorf("TIFF (%d) is no smaller than BMP (%d)", sizes[TIFF], sizes[BMP])
+	}
+}

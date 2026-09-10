@@ -4,7 +4,11 @@
 
 package svg
 
-import "github.com/go-gfx/gfx/vector"
+import (
+	"strings"
+
+	"github.com/go-gfx/gfx/vector"
+)
 
 // clipMask is one resolved <clipPath>, as coverage in device pixels: 0 where
 // the clip takes the ink away, 255 where it keeps all of it.
@@ -184,38 +188,11 @@ func applyClips(clips []*clipMask, cov []float64, ox, oy, w, h int) bool {
 // parseFillRule reads a fill-rule or clip-rule value, keeping the inherited
 // rule for "inherit" and for anything it does not recognise.
 func parseFillRule(v string, inherit vector.FillRule) vector.FillRule {
-	switch v {
+	switch strings.TrimSpace(v) {
 	case "evenodd":
 		return vector.EvenOdd
 	case "nonzero":
 		return vector.NonZero
-	}
-	return inherit
-}
-
-// parseLineCap reads a stroke-linecap value. SVG's initial value is butt, and
-// so is [vector.ButtCap].
-func parseLineCap(v string, inherit vector.LineCap) vector.LineCap {
-	switch v {
-	case "butt":
-		return vector.ButtCap
-	case "round":
-		return vector.RoundCap
-	case "square":
-		return vector.SquareCap
-	}
-	return inherit
-}
-
-// parseLineJoin reads a stroke-linejoin value.
-func parseLineJoin(v string, inherit vector.LineJoin) vector.LineJoin {
-	switch v {
-	case "miter":
-		return vector.MiterJoin
-	case "round":
-		return vector.RoundJoin
-	case "bevel":
-		return vector.BevelJoin
 	}
 	return inherit
 }

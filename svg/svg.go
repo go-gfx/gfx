@@ -126,9 +126,14 @@ type state struct {
 	strokeOn  bool            // whether the outline is drawn
 	strokeRef string          // id of the paint server stroking the shape
 	strokeW   float64         // stroke width in USER units; scaled by m at paint time
-	fillRule  vector.FillRule // how the interior of a shape is decided
-	cap       vector.LineCap  // how an open stroke end is finished
-	join      vector.LineJoin // how two stroke segments meet
+	fillRule  vector.FillRule // nonzero (initial) or evenodd
+	cap       vector.LineCap  // butt (initial), round or square
+	join      vector.LineJoin // miter (initial), round or bevel
+	miter     float64         // miter limit; zero lets the stroker use its default
+	dash      []float64       // dash pattern in USER units; empty draws solid
+	dashPhase float64         // dash offset in USER units
+	fillOp    float64         // fill-opacity, 0..1
+	strokeOp  float64         // stroke-opacity, 0..1
 	clips     []*clipMask     // clips in force, intersected at paint time
 	groups    []int           // indices into renderer.groups of the enclosing <g> ancestors
 	vpW, vpH  float64         // current viewport size, for percentage lengths
@@ -338,13 +343,28 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 	st := state{
 		// Scale to device pixels AND translate the viewBox minimum to the origin,
 		// so a viewBox like "0 -960 960 960" lands its content on the raster.
-		m:       matrix{scale, 0, 0, scale, -vbMinX * scale, -vbMinY * scale},
-		fill:    ink,
-		paint:   true,
-		strokeW: 1, // the SVG default
-		vpW:     vbW,
-		vpH:     vbH,
+		m:     matrix{scale, 0, 0, scale, -vbMinX * scale, -vbMinY * scale},
+		fill:  ink,
+		paint: true,
+		// The initial values from the SVG 1.1 property index: fill black,
+		// stroke none, stroke-width 1, fill-rule nonzero, stroke-linecap butt,
+		// stroke-linejoin miter, both opacities 1. ButtCap and MiterJoin are the
+		// zero values, so they are named here rather than left implicit — the
+		// previous code reached the stroker through a convenience wrapper that
+		// forced ROUND, which happened to match Iconoir and would silently
+		// round every pack that asks for butt.
+		strokeW:  1,
+		fillRule: vector.NonZero,
+		cap:      vector.ButtCap,
+		join:     vector.MiterJoin,
+		fillOp:   1,
+		strokeOp: 1,
+		vpW:      vbW,
+		vpH:      vbH,
 	}
+	// The root <svg> carries presentation attributes like any other element, and
+	// they are inherited by everything inside it.
+	st = r.applyPaintAttrs(&root, st)
 	for i := range root.Children {
 		r.render(&root.Children[i], st)
 	}
@@ -390,6 +410,78 @@ var notRendered = map[string]bool{
 	"symbol": true, "marker": true, "pattern": true,
 }
 
+// applyPaintAttrs folds an element's presentation attributes into the inherited
+// state. It is separate from render because the ROOT <svg> needs it too, and the
+// root is not rendered: Rasterize walks its children.
+//
+// That gap silently changed what an icon pack looks like. Iconoir puts
+// fill="none" and stroke-width="1.5" on the root and stroke="currentColor" on
+// each path, so with the root's attributes dropped every closed path inherited
+// the default fill and a magnifier came out as a solid disc — 40% of the box
+// inked instead of a thin outline — while the open handle path still stroked
+// correctly and made the result look deliberate.
+func (r *renderer) applyPaintAttrs(n *xnode, st state) state {
+	if v, ok := n.attr("fill"); ok {
+		st.fill, st.paint, st.fillRef = resolveFill(v, st.fill, st.paint, r.ink, r.paper)
+		st.paint = st.paint && r.paintExists(st.fillRef)
+	}
+	if v, ok := n.attr("stroke"); ok {
+		st.stroke, st.strokeOn, st.strokeRef = resolveFill(v, st.stroke, st.strokeOn, r.ink, r.paper)
+		st.strokeOn = st.strokeOn && r.paintExists(st.strokeRef)
+	}
+	if v, ok := n.attr("fill-rule"); ok {
+		// Read through the same function as clip-rule: the two attributes name
+		// one rule, and two spellings of it would drift apart.
+		st.fillRule = parseFillRule(v, st.fillRule)
+	}
+	if v, ok := n.attr("fill-opacity"); ok {
+		st.fillOp = parseOpacity(v, st.fillOp)
+	}
+	if v, ok := n.attr("stroke-opacity"); ok {
+		st.strokeOp = parseOpacity(v, st.strokeOp)
+	}
+	if v, ok := n.attr("stroke-linecap"); ok {
+		switch strings.TrimSpace(v) {
+		case "butt":
+			st.cap = vector.ButtCap
+		case "round":
+			st.cap = vector.RoundCap
+		case "square":
+			st.cap = vector.SquareCap
+		}
+	}
+	if v, ok := n.attr("stroke-linejoin"); ok {
+		switch strings.TrimSpace(v) {
+		case "miter":
+			st.join = vector.MiterJoin
+		case "round":
+			st.join = vector.RoundJoin
+		case "bevel":
+			st.join = vector.BevelJoin
+		}
+	}
+	if v, ok := n.attr("stroke-miterlimit"); ok {
+		// Below 1 is an error; the stroker's own default stands.
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f >= 1 {
+			st.miter = f
+		}
+	}
+	if v, ok := n.attr("stroke-dasharray"); ok {
+		st.dash = parseDashArray(v, st.vpW)
+	}
+	if v, ok := n.attr("stroke-dashoffset"); ok {
+		st.dashPhase = parseLen(v, st.vpW)
+	}
+	if v, ok := n.attr("stroke-width"); ok {
+		// An explicit width of zero switches the outline OFF, so the value is
+		// taken whatever it is rather than only when positive. A width this
+		// subset cannot parse reads as zero, which matches the package's rule
+		// that a malformed shape is skipped rather than guessed at.
+		st.strokeW = parseLen(v, st.vpW)
+	}
+	return st
+}
+
 func (r *renderer) render(n *xnode, parent state) {
 	if notRendered[n.XMLName.Local] {
 		return
@@ -399,30 +491,7 @@ func (r *renderer) render(n *xnode, parent state) {
 	if v, ok := n.attr("transform"); ok {
 		st.m = parent.m.mul(parseTransform(v))
 	}
-	if v, ok := n.attr("fill"); ok {
-		st.fill, st.paint, st.fillRef = resolveFill(v, parent.fill, parent.paint, r.ink, r.paper)
-		st.paint = st.paint && r.paintExists(st.fillRef)
-	}
-	if v, ok := n.attr("stroke"); ok {
-		st.stroke, st.strokeOn, st.strokeRef = resolveFill(v, parent.stroke, parent.strokeOn, r.ink, r.paper)
-		st.strokeOn = st.strokeOn && r.paintExists(st.strokeRef)
-	}
-	if v, ok := n.attr("stroke-width"); ok {
-		// An explicit width of zero switches the outline OFF, so the value is
-		// taken whatever it is rather than only when positive. A width this
-		// subset cannot parse reads as zero, which matches the package's rule
-		// that a malformed shape is skipped rather than guessed at.
-		st.strokeW = parseLen(v, st.vpW)
-	}
-	if v, ok := n.attr("fill-rule"); ok {
-		st.fillRule = parseFillRule(v, parent.fillRule)
-	}
-	if v, ok := n.attr("stroke-linecap"); ok {
-		st.cap = parseLineCap(v, parent.cap)
-	}
-	if v, ok := n.attr("stroke-linejoin"); ok {
-		st.join = parseLineJoin(v, parent.join)
-	}
+	st = r.applyPaintAttrs(n, st)
 	if v, ok := n.attr("clip-path"); ok {
 		if id, ok := parsePaintRef(v); ok {
 			if c := r.clipFor(id, st); c != nil {
@@ -511,25 +580,55 @@ func (r *renderer) addBounds(st state, rect image.Rectangle) {
 // The two are composited in turn rather than gathered first, because a
 // Rasterizer's coverage grid aliases its own scratch buffer and is only valid
 // until the next Fill or Stroke call.
+// scaleCov multiplies a coverage span by an opacity. paintFor forces a solid
+// paint to full alpha, so fill-opacity and stroke-opacity are applied to the
+// coverage instead — which is also where they belong for a gradient, whose own
+// stop alphas must not be overwritten.
+func scaleCov(cov []float64, k float64) []float64 {
+	if k >= 1 {
+		return cov
+	}
+	out := make([]float64, len(cov))
+	for i, c := range cov {
+		out[i] = c * k
+	}
+	return out
+}
+
 func (r *renderer) fillPath(p *vector.Path, st state) {
 	var rz vector.Rasterizer
-	if st.paint {
+	if st.paint && st.fillOp > 0 {
 		if cov, ox, oy, w, h, ok := rz.Fill(p, st.fillRule, r.img.W, r.img.H); ok {
 			if applyClips(st.clips, cov, ox, oy, w, h) {
-				vector.Composite(r.img, cov, ox, oy, w, h, r.paintFor(st, st.fillRef, st.fill, ox, oy, w, h))
+				vector.Composite(r.img, scaleCov(cov, st.fillOp), ox, oy, w, h,
+					r.paintFor(st, st.fillRef, st.fill, ox, oy, w, h))
 				r.addBounds(st, image.Rect(ox, oy, ox+w, oy+h))
 			}
 		}
 	}
-	if !st.strokeOn || st.strokeW <= 0 {
+	if !st.strokeOn || st.strokeW <= 0 || st.strokeOp <= 0 {
 		return
 	}
 	// A stroke width is a length in user units, so it passes through the
-	// transform like any other length.
-	style := vector.StrokeStyle{Width: st.strokeW * st.m.scale(), Cap: st.cap, Join: st.join}
+	// transform like any other length — and so do the dash lengths.
+	scale := st.m.scale()
+	style := vector.StrokeStyle{
+		Width:      st.strokeW * scale,
+		Cap:        st.cap,
+		Join:       st.join,
+		MiterLimit: st.miter,
+		DashPhase:  st.dashPhase * scale,
+	}
+	if len(st.dash) > 0 {
+		style.Dash = make([]float64, len(st.dash))
+		for i, d := range st.dash {
+			style.Dash[i] = d * scale
+		}
+	}
 	if cov, ox, oy, w, h, ok := rz.StrokeWith(p, style, r.img.W, r.img.H); ok {
 		if applyClips(st.clips, cov, ox, oy, w, h) {
-			vector.Composite(r.img, cov, ox, oy, w, h, r.paintFor(st, st.strokeRef, st.stroke, ox, oy, w, h))
+			vector.Composite(r.img, scaleCov(cov, st.strokeOp), ox, oy, w, h,
+				r.paintFor(st, st.strokeRef, st.stroke, ox, oy, w, h))
 			r.addBounds(st, image.Rect(ox, oy, ox+w, oy+h))
 		}
 	}
