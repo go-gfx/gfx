@@ -118,25 +118,31 @@ var errNoSVG = errors.New("svg: no parseable <svg> root")
 
 // state is the inherited rendering context flowing down the element tree.
 type state struct {
-	m         matrix     // composed user->device transform
-	fill      color.RGBA // resolved current fill colour
-	paint     bool       // whether the current fill paints anything
-	fillRef   string     // id of the paint server filling the shape, "" for a plain colour
-	stroke    color.RGBA // resolved current stroke colour
-	strokeOn  bool       // whether the outline is drawn
-	strokeRef string     // id of the paint server stroking the shape
-	strokeW   float64    // stroke width in USER units; scaled by m at paint time
-	groups    []int      // indices into renderer.groups of the enclosing <g> ancestors
-	vpW, vpH  float64    // current viewport size, for percentage lengths
+	m         matrix          // composed user->device transform
+	fill      color.RGBA      // resolved current fill colour
+	paint     bool            // whether the current fill paints anything
+	fillRef   string          // id of the paint server filling the shape, "" for a plain colour
+	stroke    color.RGBA      // resolved current stroke colour
+	strokeOn  bool            // whether the outline is drawn
+	strokeRef string          // id of the paint server stroking the shape
+	strokeW   float64         // stroke width in USER units; scaled by m at paint time
+	fillRule  vector.FillRule // how the interior of a shape is decided
+	cap       vector.LineCap  // how an open stroke end is finished
+	join      vector.LineJoin // how two stroke segments meet
+	clips     []*clipMask     // clips in force, intersected at paint time
+	groups    []int           // indices into renderer.groups of the enclosing <g> ancestors
+	vpW, vpH  float64         // current viewport size, for percentage lengths
 }
 
 // renderer holds the target surface and per-page options.
 type renderer struct {
-	img    *raster.Image
-	ink    color.RGBA
-	paper  color.RGBA
-	groups []Group
-	grads  map[string]gradient // paint servers, by id
+	img       *raster.Image
+	ink       color.RGBA
+	paper     color.RGBA
+	groups    []Group
+	grads     map[string]gradient   // paint servers, by id
+	clipDefs  map[string]*xnode     // <clipPath> elements, by id
+	clipCache map[clipKey]*clipMask // clips already rasterised
 }
 
 // gradient is one <linearGradient> or <radialGradient>. Coordinates are kept as
@@ -152,10 +158,18 @@ type gradient struct {
 	stops      []vector.Stop
 }
 
-// collectGradients walks the whole document once, recording every paint server it
-// finds by id. A pre-pass is required because SVG allows a shape to reference a
-// gradient declared after it.
-func (r *renderer) collectGradients(n *xnode) {
+// collectDefs walks the whole document once, recording every paint server and
+// every <clipPath> it finds by id. A pre-pass is required because SVG allows a
+// shape to reference a definition declared after it.
+func (r *renderer) collectDefs(n *xnode) {
+	if n.XMLName.Local == "clipPath" {
+		if id, ok := n.attr("id"); ok && id != "" {
+			if r.clipDefs == nil {
+				r.clipDefs = map[string]*xnode{}
+			}
+			r.clipDefs[id] = n
+		}
+	}
 	switch n.XMLName.Local {
 	case "linearGradient", "radialGradient":
 		if id, ok := n.attr("id"); ok && id != "" {
@@ -163,7 +177,7 @@ func (r *renderer) collectGradients(n *xnode) {
 		}
 	}
 	for i := range n.Children {
-		r.collectGradients(&n.Children[i])
+		r.collectDefs(&n.Children[i])
 	}
 }
 
@@ -319,7 +333,7 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 	}
 
 	r.grads = map[string]gradient{}
-	r.collectGradients(&root)
+	r.collectDefs(&root)
 
 	st := state{
 		// Scale to device pixels AND translate the viewBox minimum to the origin,
@@ -400,6 +414,28 @@ func (r *renderer) render(n *xnode, parent state) {
 		// that a malformed shape is skipped rather than guessed at.
 		st.strokeW = parseLen(v, st.vpW)
 	}
+	if v, ok := n.attr("fill-rule"); ok {
+		st.fillRule = parseFillRule(v, parent.fillRule)
+	}
+	if v, ok := n.attr("stroke-linecap"); ok {
+		st.cap = parseLineCap(v, parent.cap)
+	}
+	if v, ok := n.attr("stroke-linejoin"); ok {
+		st.join = parseLineJoin(v, parent.join)
+	}
+	if v, ok := n.attr("clip-path"); ok {
+		if id, ok := parsePaintRef(v); ok {
+			if c := r.clipFor(id, st); c != nil {
+				// Clips nest by intersection, so a clip on a group and a clip
+				// on the shape inside it both apply. A fresh slice keeps
+				// siblings from aliasing one another's backing array.
+				nc := make([]*clipMask, len(parent.clips)+1)
+				copy(nc, parent.clips)
+				nc[len(parent.clips)] = c
+				st.clips = nc
+			}
+		}
+	}
 	if n.XMLName.Local == "g" {
 		idx := len(r.groups)
 		r.groups = append(r.groups, Group{Attrs: n.attrMap()})
@@ -412,16 +448,12 @@ func (r *renderer) render(n *xnode, parent state) {
 	}
 
 	switch n.XMLName.Local {
-	case "path":
-		r.drawPath(n, st)
-	case "rect":
-		r.drawRect(n, st)
-	case "circle":
-		r.drawCircle(n, st)
-	case "polygon":
-		r.drawPoly(n, st, true)
-	case "polyline":
-		r.drawPoly(n, st, false)
+	case "path", "rect", "circle", "polygon", "polyline":
+		if st.paint || st.strokeOn {
+			if p, ok := r.shapePath(n, st); ok {
+				r.fillPath(p, st)
+			}
+		}
 	case "image":
 		r.drawImage(n, st)
 	case "svg":
@@ -482,9 +514,11 @@ func (r *renderer) addBounds(st state, rect image.Rectangle) {
 func (r *renderer) fillPath(p *vector.Path, st state) {
 	var rz vector.Rasterizer
 	if st.paint {
-		if cov, ox, oy, w, h, ok := rz.Fill(p, vector.NonZero, r.img.W, r.img.H); ok {
-			vector.Composite(r.img, cov, ox, oy, w, h, r.paintFor(st, st.fillRef, st.fill, ox, oy, w, h))
-			r.addBounds(st, image.Rect(ox, oy, ox+w, oy+h))
+		if cov, ox, oy, w, h, ok := rz.Fill(p, st.fillRule, r.img.W, r.img.H); ok {
+			if applyClips(st.clips, cov, ox, oy, w, h) {
+				vector.Composite(r.img, cov, ox, oy, w, h, r.paintFor(st, st.fillRef, st.fill, ox, oy, w, h))
+				r.addBounds(st, image.Rect(ox, oy, ox+w, oy+h))
+			}
 		}
 	}
 	if !st.strokeOn || st.strokeW <= 0 {
@@ -492,36 +526,49 @@ func (r *renderer) fillPath(p *vector.Path, st state) {
 	}
 	// A stroke width is a length in user units, so it passes through the
 	// transform like any other length.
-	if cov, ox, oy, w, h, ok := rz.Stroke(p, st.strokeW*st.m.scale(), r.img.W, r.img.H); ok {
-		vector.Composite(r.img, cov, ox, oy, w, h, r.paintFor(st, st.strokeRef, st.stroke, ox, oy, w, h))
-		r.addBounds(st, image.Rect(ox, oy, ox+w, oy+h))
+	style := vector.StrokeStyle{Width: st.strokeW * st.m.scale(), Cap: st.cap, Join: st.join}
+	if cov, ox, oy, w, h, ok := rz.StrokeWith(p, style, r.img.W, r.img.H); ok {
+		if applyClips(st.clips, cov, ox, oy, w, h) {
+			vector.Composite(r.img, cov, ox, oy, w, h, r.paintFor(st, st.strokeRef, st.stroke, ox, oy, w, h))
+			r.addBounds(st, image.Rect(ox, oy, ox+w, oy+h))
+		}
 	}
 }
 
-// drawPath fills a <path> element.
-func (r *renderer) drawPath(n *xnode, st state) {
-	d, ok := n.attr("d")
-	if !ok {
-		return
+// shapePath builds the device-space outline of one shape element, and reports
+// false for anything that is not a shape this subset draws.
+//
+// It is the single place a shape's geometry is written, so a <clipPath> clips
+// with exactly the outline the renderer would otherwise have painted — the two
+// cannot drift apart.
+func (r *renderer) shapePath(n *xnode, st state) (*vector.Path, bool) {
+	switch n.XMLName.Local {
+	case "path":
+		d, ok := n.attr("d")
+		if !ok {
+			return nil, false
+		}
+		return buildPath(d, st.m)
+	case "rect":
+		return rectPath(n, st)
+	case "circle":
+		return circlePath(n, st)
+	case "polygon":
+		return polyPath(n, st, true)
+	case "polyline":
+		return polyPath(n, st, false)
 	}
-	p, ok := buildPath(d, st.m)
-	if !ok {
-		return
-	}
-	r.fillPath(p, st)
+	return nil, false
 }
 
-// drawRect fills a <rect> element.
-func (r *renderer) drawRect(n *xnode, st state) {
-	if !st.paint && !st.strokeOn {
-		return
-	}
+// rectPath builds a <rect>, rounded when rx or ry says so.
+func rectPath(n *xnode, st state) (*vector.Path, bool) {
 	x := parseLen(n.attrOr("x", "0"), st.vpW)
 	y := parseLen(n.attrOr("y", "0"), st.vpH)
 	w := parseLen(n.attrOr("width", "0"), st.vpW)
 	h := parseLen(n.attrOr("height", "0"), st.vpH)
 	if w <= 0 || h <= 0 {
-		return
+		return nil, false
 	}
 	rx := parseLen(n.attrOr("rx", n.attrOr("ry", "0")), st.vpW)
 	ry := parseLen(n.attrOr("ry", n.attrOr("rx", "0")), st.vpH)
@@ -534,30 +581,27 @@ func (r *renderer) drawRect(n *xnode, st state) {
 	p := vector.NewPath()
 	if rx > 0 && ry > 0 {
 		buildRoundRect(p, x, y, w, h, rx, ry, st.m)
-	} else {
-		x0, y0 := st.m.apply(x, y)
-		x1, y1 := st.m.apply(x+w, y)
-		x2, y2 := st.m.apply(x+w, y+h)
-		x3, y3 := st.m.apply(x, y+h)
-		p.MoveTo(x0, y0)
-		p.LineTo(x1, y1)
-		p.LineTo(x2, y2)
-		p.LineTo(x3, y3)
-		p.Close()
+		return p, true
 	}
-	r.fillPath(p, st)
+	x0, y0 := st.m.apply(x, y)
+	x1, y1 := st.m.apply(x+w, y)
+	x2, y2 := st.m.apply(x+w, y+h)
+	x3, y3 := st.m.apply(x, y+h)
+	p.MoveTo(x0, y0)
+	p.LineTo(x1, y1)
+	p.LineTo(x2, y2)
+	p.LineTo(x3, y3)
+	p.Close()
+	return p, true
 }
 
-// drawCircle fills a <circle> element, approximating the disc with four cubics.
-func (r *renderer) drawCircle(n *xnode, st state) {
-	if !st.paint && !st.strokeOn {
-		return
-	}
+// circlePath builds a <circle>, approximating the disc with four cubics.
+func circlePath(n *xnode, st state) (*vector.Path, bool) {
 	cx := parseLen(n.attrOr("cx", "0"), st.vpW)
 	cy := parseLen(n.attrOr("cy", "0"), st.vpH)
 	rr := parseLen(n.attrOr("r", "0"), st.vpW)
 	if rr <= 0 {
-		return
+		return nil, false
 	}
 	const k = 0.5522847498307936
 	p := vector.NewPath()
@@ -574,25 +618,21 @@ func (r *renderer) drawCircle(n *xnode, st state) {
 	cube(cx-rr, cy-k*rr, cx-k*rr, cy-rr, cx, cy-rr)
 	cube(cx+k*rr, cy-rr, cx+rr, cy-k*rr, cx+rr, cy)
 	p.Close()
-	r.fillPath(p, st)
+	return p, true
 }
 
-// drawPoly fills a <polygon> (closed) or draws a <polyline> (left open) from its
-// "points" list — a flat run of x,y pairs separated by commas and/or whitespace.
-// Fewer than two points draws nothing. Fill and stroke follow the paint state
-// exactly like every other shape (an open polyline with a fill fills as if
-// closed, the SVG rule).
-func (r *renderer) drawPoly(n *xnode, st state, closed bool) {
-	if !st.paint && !st.strokeOn {
-		return
-	}
+// polyPath builds a <polygon> (closed) or a <polyline> (left open) from its
+// "points" list — a flat run of x,y pairs separated by commas and/or
+// whitespace. Fewer than two points builds nothing. An open polyline with a
+// fill still fills as if closed, which is the SVG rule.
+func polyPath(n *xnode, st state, closed bool) (*vector.Path, bool) {
 	pts, ok := n.attr("points")
 	if !ok {
-		return
+		return nil, false
 	}
 	f := parseFloats(pts)
 	if len(f) < 4 {
-		return
+		return nil, false
 	}
 	p := vector.NewPath()
 	x0, y0 := st.m.apply(f[0], f[1])
@@ -604,7 +644,7 @@ func (r *renderer) drawPoly(n *xnode, st state, closed bool) {
 	if closed {
 		p.Close()
 	}
-	r.fillPath(p, st)
+	return p, true
 }
 
 // drawImage decodes an embedded raster <image> and blits it into the transformed

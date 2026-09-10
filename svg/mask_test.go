@@ -9,8 +9,13 @@ import (
 	"testing"
 )
 
+// The caps are asked for, not assumed: SVG's initial stroke-linecap is butt,
+// and a butt-capped horizontal line on whole pixels has no anti-aliased edge
+// at all for the test below to find. Round caps are what this fleet's icons
+// carry anyway.
 const strokedDoc = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-<path d="M4 12 L20 12" stroke="currentColor" stroke-width="2" fill="none"/></svg>`
+<path d="M4 12 L20 12" stroke="currentColor" stroke-width="2" fill="none"
+ stroke-linecap="round"/></svg>`
 
 // TestAMaskIsCoverageAndNothingElse covers the whole point of the mask: the
 // shape is kept and the colour is left to whoever paints it. An icon is drawn
