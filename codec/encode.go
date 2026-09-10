@@ -29,10 +29,13 @@ var ErrCannotEncode = fmt.Errorf("codec: no reference encoder for this format")
 // Encode writes an image in the named format.
 //
 // The formats that can be written are PNG, JPEG, GIF, TIFF and BMP, each
-// through the same reference library that reads it. WEBP, ICO, ICNS, PNM, QOI,
-// JP2 and JBIG2 can be read here and not written: they return
-// [ErrCannotEncode] rather than something in another format under the asked-for
-// name.
+// through the same reference library that reads it. WEBP, ICNS, PNM, QOI, JP2
+// and JBIG2 can be read here and not written: they return [ErrCannotEncode]
+// rather than something in another format under the asked-for name.
+//
+// ICO is written too, but by [EncodeICO] and not here: an .ico holds several
+// independent representations for a chooser to pick between, and a function
+// taking one image has nowhere to put the others.
 //
 // Alpha survives into PNG and TIFF, which carry it. JPEG, GIF and BMP do not,
 // and what they are given is the image composited onto white — chosen rather
