@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"image/png"
 	"io"
 	"sort"
 
@@ -92,7 +91,7 @@ func EncodeICNS(w io.Writer, imgs ...*raster.Image) error {
 		}
 		seen[img.W] = true
 		var buf bytes.Buffer
-		if err := png.Encode(&buf, nrgba(img)); err != nil {
+		if err := pngEncode(&buf, nrgba(img)); err != nil {
 			return fmt.Errorf("codec: icns: image %d: %w", i, err)
 		}
 		reps = append(reps, rep{size: img.W, kind: kind, payload: buf.Bytes()})

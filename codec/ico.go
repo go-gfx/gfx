@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"image/png"
 	"io"
 
 	"github.com/go-gfx/gfx/raster"
@@ -64,7 +63,7 @@ func EncodeICO(w io.Writer, imgs ...*raster.Image) error {
 				i, img.W, img.H, icoMaxSide)
 		}
 		var buf bytes.Buffer
-		if err := png.Encode(&buf, nrgba(img)); err != nil {
+		if err := pngEncode(&buf, nrgba(img)); err != nil {
 			return fmt.Errorf("codec: ico: image %d: %w", i, err)
 		}
 		payloads[i] = buf.Bytes()

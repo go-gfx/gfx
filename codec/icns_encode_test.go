@@ -8,6 +8,9 @@ package codec
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"image"
+	"io"
 	"strings"
 	"testing"
 )
@@ -102,5 +105,24 @@ func TestICNSRefusesWhatTheContainerCannotName(t *testing.T) {
 	wide.W, wide.H = 64, 16
 	if err := EncodeICNS(&buf, wide); err == nil {
 		t.Error("a non-square icon was accepted")
+	}
+}
+
+// TestICNSSaysWhichRepresentationWouldNotEncode: every chunk length is written
+// from its payload, so one payload that will not encode stops the container
+// rather than producing chunk headers that lie about what follows them.
+func TestICNSSaysWhichRepresentationWouldNotEncode(t *testing.T) {
+	defer func(f func(io.Writer, image.Image) error) { pngEncode = f }(pngEncode)
+	pngEncode = func(io.Writer, image.Image) error { return errors.New("no") }
+	var buf bytes.Buffer
+	err := EncodeICNS(&buf, solid(16, 1, 2, 3))
+	if err == nil {
+		t.Fatal("a payload that would not encode was accepted")
+	}
+	if !strings.Contains(err.Error(), "image 0") {
+		t.Errorf("error %q does not name the representation that failed", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("%d bytes were written for a container that failed", buf.Len())
 	}
 }

@@ -121,10 +121,11 @@ func (r *renderer) buildClip(n *xnode, st state) *clipMask {
 				if v <= 0 {
 					continue
 				}
-				if v > 1 {
-					v = 1
-				}
-				if u := uint8(v*255 + 0.5); u > acc[row+ox+x] {
+				// Coverage is a geometric area, so a region the path winds
+				// twice is inside once rather than twice and v cannot pass 1
+				// by more than rounding. min keeps the conversion in range
+				// without a branch no input can take.
+				if u := uint8(min(v, 1)*255 + 0.5); u > acc[row+ox+x] {
 					acc[row+ox+x] = u
 				}
 			}

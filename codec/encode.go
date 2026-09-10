@@ -87,6 +87,14 @@ func CanEncode(f Format) bool {
 	}
 }
 
+// pngEncode is how a container gets one representation's bytes. It is a
+// variable rather than a plain call because a container must know a payload's
+// length before it can write the directory that points at it, so it encodes
+// into a buffer — and a buffer never fails, which leaves png.Encode's error
+// return unreachable from every input the encoders accept. A test replaces it
+// to exercise what a container does when a payload will not encode.
+var pngEncode = png.Encode
+
 // nrgba presents the image to an encoder that carries alpha. The pixels are
 // already straight alpha in the same order, so this is a header and not a copy
 // of the pixels.

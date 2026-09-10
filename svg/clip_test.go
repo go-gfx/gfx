@@ -147,3 +147,114 @@ func TestStrokeLinejoin(t *testing.T) {
 	opaque(t, rasterise(t, doc(` stroke-linejoin="miter"`)), 88, 12, "the miter reaches the crossing")
 	clear(t, rasterise(t, doc(` stroke-linejoin="bevel"`)), 88, 12, "the bevel cuts it away")
 }
+
+// TestOneClipServesEveryShapeThatNamesIt: a clip's coverage is kept under its
+// id and the transform in force, so a document that cuts ten shapes with one
+// <clipPath> rasterises it once. Both shapes still have to come out cut.
+func TestOneClipServesEveryShapeThatNamesIt(t *testing.T) {
+	r := rasterise(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+	  <defs><clipPath id="c"><rect width="50" height="100"/></clipPath></defs>
+	  <rect width="100" height="50" fill="#FF0000" clip-path="url(#c)"/>
+	  <rect y="50" width="100" height="50" fill="#0000FF" clip-path="url(#c)"/>
+	</svg>`)
+	opaque(t, r, 25, 25, "first shape, inside the clip")
+	opaque(t, r, 25, 75, "second shape, inside the clip")
+	clear(t, r, 75, 25, "first shape, outside the clip")
+	clear(t, r, 75, 75, "second shape, outside the clip")
+}
+
+// TestAClipPathCarriesItsOwnRuleAndTransform: clip-rule and transform on the
+// <clipPath> element apply to everything inside it. A ring cut from one path
+// and moved into place needs both, and taking them only from the shapes would
+// silently drop them.
+func TestAClipPathCarriesItsOwnRuleAndTransform(t *testing.T) {
+	r := rasterise(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+	  <defs><clipPath id="c" clip-rule="evenodd" transform="translate(50 0)">
+	    <path d="M0 0H50V100H0Z M10 40H40V60H10Z"/></clipPath></defs>
+	  <rect width="100" height="100" fill="#FF0000" clip-path="url(#c)"/>
+	</svg>`)
+	opaque(t, r, 55, 10, "where the clip's transform put it")
+	clear(t, r, 5, 10, "where it would have been without the transform")
+	clear(t, r, 75, 50, "the hole evenodd takes out")
+}
+
+// TestAShapeInsideAClipCarriesItsOwnTransform: the shapes in a <clipPath> are
+// transformed like any others, on top of whatever the clip itself carries.
+func TestAShapeInsideAClipCarriesItsOwnTransform(t *testing.T) {
+	r := rasterise(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+	  <defs><clipPath id="c">
+	    <circle cx="0" cy="0" r="20" transform="translate(50 50)"/></clipPath></defs>
+	  <rect width="100" height="100" fill="#FF0000" clip-path="url(#c)"/>
+	</svg>`)
+	opaque(t, r, 50, 50, "where the transform put the circle")
+	clear(t, r, 5, 5, "where the circle sat before it")
+}
+
+// TestAGroupInsideAClipContributesItsChildren: a <clipPath> may hold containers,
+// and what clips is the shapes underneath them. Skipping the group would leave
+// the clip empty, which keeps nothing at all — the opposite of what it says.
+func TestAGroupInsideAClipContributesItsChildren(t *testing.T) {
+	r := rasterise(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+	  <defs><clipPath id="c"><g><circle cx="50" cy="50" r="20"/></g></clipPath></defs>
+	  <rect width="100" height="100" fill="#FF0000" clip-path="url(#c)"/>
+	</svg>`)
+	opaque(t, r, 50, 50, "inside the circle the group holds")
+	clear(t, r, 5, 5, "outside it")
+}
+
+// TestAClipThatCoversNoPixelKeepsNothing: an empty <clipPath>, and one holding
+// only a shape that falls outside the canvas, both cut everything away. A clip
+// that covers nothing is not the same as no clip at all, and treating the two
+// alike would paint the shape over the whole page.
+func TestAClipThatCoversNoPixelKeepsNothing(t *testing.T) {
+	for _, c := range []struct{ why, defs string }{
+		{"a clip with no shapes in it", `<clipPath id="c"></clipPath>`},
+		{"a clip whose only shape is off the canvas",
+			`<clipPath id="c"><circle cx="-500" cy="-500" r="10"/></clipPath>`},
+	} {
+		r := rasterise(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+		  <defs>`+c.defs+`</defs>
+		  <rect width="100" height="100" fill="#FF0000" clip-path="url(#c)"/>
+		</svg>`)
+		clear(t, r, 50, 50, c.why)
+	}
+}
+
+// TestAPathThatWindsTwiceStillOnlyOpensTheClipOnce: under the nonzero rule a
+// path laid over itself rasterises to twice full coverage. Stored unclamped in
+// the byte a mask keeps, that wraps round to nearly nothing and the clip closes
+// where it should be widest.
+func TestAPathThatWindsTwiceStillOnlyOpensTheClipOnce(t *testing.T) {
+	r := rasterise(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+	  <defs><clipPath id="c"><path d="M10 10H70V70H10Z M10 10H70V70H10Z"/></clipPath></defs>
+	  <rect width="100" height="100" fill="#FF0000" clip-path="url(#c)"/>
+	</svg>`)
+	opaque(t, r, 40, 40, "inside the doubly wound square")
+	clear(t, r, 90, 90, "outside it")
+}
+
+// TestAClippedShapeIsNotWidenedToItsBoundingBox: the clip is applied over the
+// shape's bounding box, and the corners of a circle's box carry no ink to
+// begin with. They must still carry none afterwards.
+func TestAClippedShapeIsNotWidenedToItsBoundingBox(t *testing.T) {
+	r := rasterise(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+	  <defs><clipPath id="c"><rect width="100" height="100"/></clipPath></defs>
+	  <circle cx="50" cy="50" r="30" fill="#FF0000" clip-path="url(#c)"/>
+	</svg>`)
+	opaque(t, r, 50, 50, "the middle of the circle")
+	clear(t, r, 21, 21, "the corner of its bounding box")
+}
+
+// TestARuleNobodySpellsLeavesTheInheritedOne: fill-rule and clip-rule name one
+// rule, and a value that is neither of the two it defines is not a reason to
+// change it. Reading an unknown keyword as evenodd would punch a hole through
+// every shape drawn with two subpaths.
+func TestARuleNobodySpellsLeavesTheInheritedOne(t *testing.T) {
+	r := rasterise(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+	  <defs><clipPath id="c"><path clip-rule="sideways"
+	    d="M0 0H100V100H0Z M30 30H70V70H30Z"/></clipPath></defs>
+	  <rect width="100" height="100" fill="#FF0000" clip-path="url(#c)"/>
+	</svg>`)
+	opaque(t, r, 5, 5, "the outer square")
+	opaque(t, r, 50, 50, "the inner one, which nonzero fills and evenodd would not")
+}

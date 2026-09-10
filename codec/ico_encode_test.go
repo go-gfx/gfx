@@ -7,6 +7,10 @@ package codec
 
 import (
 	"bytes"
+	"errors"
+	"image"
+	"image/png"
+	"io"
 	"strings"
 	"testing"
 
@@ -99,6 +103,34 @@ func TestICORefusesWhatTheContainerCannotName(t *testing.T) {
 	}
 	if err := EncodeICO(&buf, nil); err == nil {
 		t.Error("a nil image was accepted")
+	}
+	if err := EncodeICO(&buf, raster.New(0, 0)); err == nil {
+		t.Error("an image with no pixels was accepted")
+	}
+}
+
+// TestICOSaysWhichRepresentationWouldNotEncode: the directory is written from
+// the payloads, so one payload that will not encode stops the whole container
+// rather than leaving an entry pointing at nothing — and the error names the
+// representation, because a caller passing eight sizes needs to know which.
+func TestICOSaysWhichRepresentationWouldNotEncode(t *testing.T) {
+	defer func(f func(io.Writer, image.Image) error) { pngEncode = f }(pngEncode)
+	pngEncode = func(w io.Writer, m image.Image) error {
+		if m.Bounds().Dx() == 32 {
+			return errors.New("no")
+		}
+		return png.Encode(w, m)
+	}
+	var buf bytes.Buffer
+	err := EncodeICO(&buf, solid(16, 1, 2, 3), solid(32, 1, 2, 3))
+	if err == nil {
+		t.Fatal("a payload that would not encode was accepted")
+	}
+	if !strings.Contains(err.Error(), "image 1") {
+		t.Errorf("error %q does not name the representation that failed", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("%d bytes were written for a container that failed", buf.Len())
 	}
 }
 
