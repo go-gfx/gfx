@@ -133,3 +133,16 @@ func LabToSRGB(l Lab) (r, g, b float64) {
 	lr, lg, lb := XYZToLinearRGB(LabToXYZ(l))
 	return LinearToSRGB(lr), LinearToSRGB(lg), LinearToSRGB(lb)
 }
+
+// LabToSRGBWP converts a CIE L*a*b* colour measured under the white point wp to
+// gamma-encoded sRGB, adapting to D65 on the way (each channel 0..1, not
+// clamped to gamut).
+//
+// [LabToSRGB] assumes D65, which is the usual choice for a screen. A colour
+// that arrives from a document says which illuminant it was measured under and
+// is often D50, and reading it as D65 tilts every neutral: the adaptation is
+// the difference between a grey and a grey with a cast.
+func LabToSRGBWP(l Lab, wp WhitePoint) (r, g, b float64) {
+	lr, lg, lb := XYZToLinearRGB(Adapt(LabToXYZWP(l, wp), wp, D65))
+	return LinearToSRGB(lr), LinearToSRGB(lg), LinearToSRGB(lb)
+}

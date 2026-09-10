@@ -268,3 +268,92 @@ func TestCalibratedIsStableUnderRandomSpaces(t *testing.T) {
 	}
 	t.Logf("worst disagreement over 200 random spaces, 8000 colours: %d level(s)", worst)
 }
+
+// popplerLab is GfxLabColorSpace::getXYZ followed by the white-point
+// multiplication ::getRGB does immediately after calling it, and the same
+// non-CMS tail as the two above.
+//
+// The multiplication is in the CALLER, not in getXYZ. Reading getXYZ alone
+// says poppler omits it and disagrees with ISO 32000-2 8.6.5.4; running
+// pdfimages on a four-pixel Lab document says it does not. The program is the
+// witness, not the function.
+func popplerLab(l Lab, wp WhitePoint) (float64, float64, float64) {
+	finv := func(t float64) float64 {
+		if t >= 6.0/29.0 {
+			return t * t * t
+		}
+		return (108.0 / 841.0) * (t - 4.0/29.0)
+	}
+	t1 := (l.L + 16) / 116
+	x, y, z := wp.X*finv(t1+l.A/500), wp.Y*finv(t1), wp.Z*finv(t1-l.B/200)
+	x, y, z = popplerBradfordToD65(x, y, z, wp.X, wp.Y, wp.Z)
+	out := [3]float64{}
+	for i, row := range popplerXYZRGB {
+		out[i] = popplerSRGBGamma(clamp01(row[0]*x + row[1]*y + row[2]*z))
+	}
+	return out[0], out[1], out[2]
+}
+
+func TestLabUnderAWhitePointAgreesWithPoppler(t *testing.T) {
+	for name, wp := range map[string]WhitePoint{
+		"D50": {X: 0.9643, Y: 1.0000, Z: 0.8251},
+		"D65": D65,
+	} {
+		t.Run(name, func(t *testing.T) {
+			worst, at := 0, Lab{}
+			for li := 0; li <= 20; li++ {
+				for ai := -8; ai <= 8; ai++ {
+					for bi := -8; bi <= 8; bi++ {
+						l := Lab{L: float64(li) * 5, A: float64(ai) * 12.5, B: float64(bi) * 12.5}
+						gr, gg, gb := LabToSRGBWP(l, wp)
+						wr, wg, wb := popplerLab(l, wp)
+						for _, d := range [][2]float64{{gr, wr}, {gg, wg}, {gb, wb}} {
+							if e := byteOf(d[0]) - byteOf(d[1]); e > worst || -e > worst {
+								if e < 0 {
+									e = -e
+								}
+								worst, at = e, l
+							}
+						}
+					}
+				}
+			}
+			if worst > levels {
+				t.Errorf("worst disagreement %d levels at %+v, want at most %d", worst, at, levels)
+			}
+			t.Logf("worst disagreement over 6069 colours: %d level(s)", worst)
+		})
+	}
+}
+
+func TestLabUnderD65IsTheOneWithoutAWhitePoint(t *testing.T) {
+	// LabToSRGBWP at D65 must be LabToSRGB, or the two would be separate
+	// answers to the same question.
+	for _, l := range []Lab{{L: 100}, {L: 50}, {L: 50, A: 60, B: -40}, {L: 20, A: -70, B: 55}} {
+		ar, ag, ab := LabToSRGB(l)
+		br, bg, bb := LabToSRGBWP(l, D65)
+		for _, d := range [][2]float64{{ar, br}, {ag, bg}, {ab, bb}} {
+			if e := byteOf(d[0]) - byteOf(d[1]); e > 1 || e < -1 {
+				t.Errorf("%+v: LabToSRGB and LabToSRGBWP(D65) differ by %d levels", l, e)
+			}
+		}
+	}
+}
+
+func TestTheWhitePointIsWhatKeepsANeutralNeutral(t *testing.T) {
+	// The reason the parameter exists. Under D50, reading a neutral Lab as
+	// though it were D65 tilts it; adapting keeps it grey.
+	d50 := WhitePoint{X: 0.9643, Y: 1.0000, Z: 0.8251}
+	r, g, b := LabToSRGBWP(Lab{L: 50}, d50)
+	if d := byteOf(r) - byteOf(b); d > 1 || d < -1 {
+		t.Errorf("a neutral Lab under D50 came back with a cast: %d %d %d", byteOf(r), byteOf(g), byteOf(b))
+	}
+	// And without the adaptation it would not be neutral: LabToXYZWP under D50
+	// fed straight to the D65 primaries is the mistake this guards.
+	lr, lg, lb := XYZToLinearRGB(LabToXYZWP(Lab{L: 50}, d50))
+	nr, nb := byteOf(LinearToSRGB(lr)), byteOf(LinearToSRGB(lb))
+	_ = lg
+	if nr == nb {
+		t.Error("skipping the adaptation produced a neutral too; this test proves nothing")
+	}
+}
