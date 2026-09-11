@@ -10,10 +10,10 @@
 //
 // It is not a general-purpose SVG renderer: it understands a practical subset —
 // a root <svg> with a viewBox (or width/height), nested <g> groups carrying
-// transforms and fills, <path> outlines (commands M/L/H/V/C/S/Q/T/Z, absolute
-// and relative; arcs are unsupported and cause the path to be skipped), <rect>,
-// <circle>, nested <svg> islands with their own viewBox, and embedded raster
-// <image> data URIs.
+// transforms and fills, <path> outlines (commands M/L/H/V/C/S/Q/T/Z and the
+// elliptical arcs A/a, absolute and relative), <rect>, <circle>, <ellipse>,
+// nested <svg> islands with their own viewBox, and embedded raster <image>
+// data URIs.
 //
 // Fills and STROKES resolve black/white/currentColor/none, #rgb and #rrggbb
 // literals, and url(#id) references to a <linearGradient> or <radialGradient> —
@@ -517,7 +517,7 @@ func (r *renderer) render(n *xnode, parent state) {
 	}
 
 	switch n.XMLName.Local {
-	case "path", "rect", "circle", "polygon", "polyline":
+	case "path", "rect", "circle", "ellipse", "polygon", "polyline":
 		if st.paint || st.strokeOn {
 			if p, ok := r.shapePath(n, st); ok {
 				r.fillPath(p, st)
@@ -652,6 +652,8 @@ func (r *renderer) shapePath(n *xnode, st state) (*vector.Path, bool) {
 		return rectPath(n, st)
 	case "circle":
 		return circlePath(n, st)
+	case "ellipse":
+		return ellipsePath(n, st)
 	case "polygon":
 		return polyPath(n, st, true)
 	case "polyline":
@@ -699,7 +701,28 @@ func circlePath(n *xnode, st state) (*vector.Path, bool) {
 	cx := parseLen(n.attrOr("cx", "0"), st.vpW)
 	cy := parseLen(n.attrOr("cy", "0"), st.vpH)
 	rr := parseLen(n.attrOr("r", "0"), st.vpW)
-	if rr <= 0 {
+	return ovalPath(cx, cy, rr, rr, st)
+}
+
+// ellipsePath builds an <ellipse>, which is a circle with two radii.
+//
+// It is separate from <circle> only because the attributes differ: rx and ry
+// against r. SVG 1.1 §9.4 says a zero or absent radius disables rendering,
+// which is the same rule as a circle's, and rx/ry resolve against the
+// viewport's width and height respectively -- a percentage radius on a
+// non-square viewport is not the same number on both axes.
+func ellipsePath(n *xnode, st state) (*vector.Path, bool) {
+	cx := parseLen(n.attrOr("cx", "0"), st.vpW)
+	cy := parseLen(n.attrOr("cy", "0"), st.vpH)
+	rx := parseLen(n.attrOr("rx", "0"), st.vpW)
+	ry := parseLen(n.attrOr("ry", "0"), st.vpH)
+	return ovalPath(cx, cy, rx, ry, st)
+}
+
+// ovalPath approximates an axis-aligned oval with four cubics -- the standard
+// construction, exact at the four extremes and within about 0.03% between them.
+func ovalPath(cx, cy, rx, ry float64, st state) (*vector.Path, bool) {
+	if rx <= 0 || ry <= 0 {
 		return nil, false
 	}
 	const k = 0.5522847498307936
@@ -711,11 +734,11 @@ func circlePath(n *xnode, st state) (*vector.Path, bool) {
 		ex, ey := st.m.apply(x, y)
 		p.CubicTo(a1x, a1y, a2x, a2y, ex, ey)
 	}
-	move(cx+rr, cy)
-	cube(cx+rr, cy+k*rr, cx+k*rr, cy+rr, cx, cy+rr)
-	cube(cx-k*rr, cy+rr, cx-rr, cy+k*rr, cx-rr, cy)
-	cube(cx-rr, cy-k*rr, cx-k*rr, cy-rr, cx, cy-rr)
-	cube(cx+k*rr, cy-rr, cx+rr, cy-k*rr, cx+rr, cy)
+	move(cx+rx, cy)
+	cube(cx+rx, cy+k*ry, cx+k*rx, cy+ry, cx, cy+ry)
+	cube(cx-k*rx, cy+ry, cx-rx, cy+k*ry, cx-rx, cy)
+	cube(cx-rx, cy-k*ry, cx-k*rx, cy-ry, cx, cy-ry)
+	cube(cx+k*rx, cy-ry, cx+rx, cy-k*ry, cx+rx, cy)
 	p.Close()
 	return p, true
 }

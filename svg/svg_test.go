@@ -759,3 +759,123 @@ func TestNumberScientific(t *testing.T) {
 		t.Fatal("scientific-notation path produced no ink")
 	}
 }
+
+// An <ellipse> is drawn, and is not a circle.
+//
+// It went unpainted entirely until 2026-09-11: the element was simply not in
+// the switch, and a shape this package does not implement is left unpainted
+// rather than guessed at -- correct behaviour, silent result. It was found by
+// a mark whose disk vanished, not by a test, so here is the test.
+func TestEllipseIsDrawn(t *testing.T) {
+	const doc = `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">` +
+		`<ellipse cx="50" cy="50" rx="40" ry="20" fill="#000000"/></svg>`
+	res, err := Rasterize(doc, Options{Scale: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ink := inked(res.Image)
+	if ink == 0 {
+		t.Fatal("an ellipse drew nothing")
+	}
+	// Its area is pi*rx*ry = 2513, against a circle of r=40 at 5027: an
+	// ellipse that came out circular would be twice this, and one that came
+	// out as an rx-radius circle is the mistake this checks for.
+	if ink < 2300 || ink > 2700 {
+		t.Errorf("%d inked pixels, want about 2513 (pi*40*20)", ink)
+	}
+
+	// The two radii are not interchangeable.
+	const tall = `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">` +
+		`<ellipse cx="50" cy="50" rx="20" ry="40" fill="#000000"/></svg>`
+	res2, err := Rasterize(tall, Options{Scale: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := inked(res2.Image); got < 2300 || got > 2700 {
+		t.Errorf("the tall ellipse inked %d pixels, want about 2513", got)
+	}
+	if !sameArea(res.Image, res2.Image) {
+		t.Error("the wide and tall ellipses cover different areas")
+	}
+	// Swapping the radii must change the PICTURE even though the area holds.
+	if identical(res.Image, res2.Image) {
+		t.Error("rx and ry were treated as the same number")
+	}
+
+	// A radius of zero disables rendering (SVG 1.1 §9.4), as it does for a
+	// circle -- rather than drawing a line or a point.
+	for _, doc := range []string{
+		`<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><ellipse cx="50" cy="50" rx="0" ry="20" fill="#000000"/></svg>`,
+		`<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><ellipse cx="50" cy="50" rx="40" fill="#000000"/></svg>`,
+	} {
+		res, err := Rasterize(doc, Options{Scale: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := inked(res.Image); got != 0 {
+			t.Errorf("an ellipse with no second radius inked %d pixels", got)
+		}
+	}
+
+	// And a stroked one, which is how every mark in the fleet uses it.
+	const stroked = `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">` +
+		`<ellipse cx="50" cy="50" rx="40" ry="20" fill="none" stroke="#000000" stroke-width="6"/></svg>`
+	res3, err := Rasterize(stroked, Options{Scale: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := inked(res3.Image); got < 800 || got > 1600 {
+		t.Errorf("the stroked ellipse inked %d pixels, want a ring of roughly 1100", got)
+	}
+}
+
+// Arcs work, and the package said for months that they did not.
+func TestArcsAreSupported(t *testing.T) {
+	const arc = `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">` +
+		`<path d="M10 50A40 20 0 0 0 90 50" fill="none" stroke="#000000" stroke-width="6"/></svg>`
+	const line = `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">` +
+		`<path d="M10 50L90 50" fill="none" stroke="#000000" stroke-width="6"/></svg>`
+	a, err := Rasterize(arc, Options{Scale: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := Rasterize(line, Options{Scale: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A curve between the same endpoints is longer than the straight line, so
+	// it inks more: a path that had been SKIPPED would ink nothing at all.
+	if inked(a.Image) <= inked(l.Image) {
+		t.Errorf("the arc inked %d and the line %d", inked(a.Image), inked(l.Image))
+	}
+}
+
+func inked(img *raster.Image) int {
+	var n int
+	for i := 3; i < len(img.Pix); i += 4 {
+		if img.Pix[i] > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+func sameArea(a, b *raster.Image) bool {
+	x, y := inked(a), inked(b)
+	if x > y {
+		x, y = y, x
+	}
+	return float64(x)/float64(y) > 0.95
+}
+
+func identical(a, b *raster.Image) bool {
+	if len(a.Pix) != len(b.Pix) {
+		return false
+	}
+	for i := range a.Pix {
+		if a.Pix[i] != b.Pix[i] {
+			return false
+		}
+	}
+	return true
+}
