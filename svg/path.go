@@ -234,8 +234,12 @@ func up(c byte) byte {
 
 // buildPath parses a "d" string and emits a device-space vector.Path with the
 // affine m applied to every coordinate. It returns ok=false when the path uses
-// an unsupported command (arcs), starts a drawing command with no move, or is
+// a command this does not know, starts a drawing command with no move, or is
 // otherwise malformed, so the caller can skip it without failing the page.
+//
+// Arcs ARE among the commands it knows -- see arcToCubics. The comment here
+// said otherwise for as long as they have worked, which is the kind of claim a
+// reader believes instead of testing.
 func buildPath(d string, m matrix) (*vector.Path, bool) {
 	sc := &pathScanner{s: d}
 	path := vector.NewPath()
