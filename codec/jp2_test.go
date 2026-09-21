@@ -11,7 +11,7 @@ import (
 	"image/color"
 	"testing"
 
-	jpeg2000 "github.com/ajroetker/go-jpeg2000"
+	jpeg2000 "github.com/go-images/jpeg2000"
 )
 
 // jp2Of encodes a small picture as JPEG 2000, losslessly so the test can check
