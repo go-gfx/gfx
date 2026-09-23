@@ -268,14 +268,13 @@ func TestAnEmptyCurveIsTheIdentity(t *testing.T) {
 }
 
 // TestAProfileThatNeedsAnEngineIsDeclined. Saying no is the whole point: a
-// lookup-table profile approximated by a matrix would be wrong silently.
+// profile approximated by a matrix it is not would be wrong silently.
+//
+// The shapes left here are the ones icclut.go does not read either. An `mft1`
+// or `mft2` lookup table USED to be on this list and is not any more: it is
+// read, and what it reads is measured in icclut_test.go.
 func TestAProfileThatNeedsAnEngineIsDeclined(t *testing.T) {
 	for name, build := range map[string]func() []byte{
-		"a lookup-table transform": func() []byte {
-			b := &iccBuilder{space: "CMYK", pcs: "Lab "}
-			b.raw("A2B0", "mft2", 100)
-			return b.bytes()
-		},
 		"a lookup table beside colorants": func() []byte {
 			b := &iccBuilder{space: "RGB ", pcs: "XYZ "}
 			b.xyz("rXYZ", 0.4, 0.2, 0.0)

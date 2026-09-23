@@ -136,11 +136,41 @@ func ReadICC(b []byte) (any, error) {
 		return nil, err
 	}
 	// A lookup-table transform takes precedence in the format, so a profile
-	// that has one is not ours to read even if it also carries colorants.
-	for _, t := range []string{"A2B0", "A2B1", "A2B2"} {
-		if _, ok := tags[t]; ok {
-			return nil, ErrICCNotArithmetic
+	// that has one is read as one even if it also carries colorants -- and a
+	// profile whose tables are all in a shape icclut.go does not read is
+	// declined rather than falling back on those colorants, which would be
+	// answering a question the profile did not ask.
+	var lut ICCLutProfile
+	saw := false
+	for i, name := range []string{"A2B0", "A2B1", "A2B2"} {
+		span, ok := tags[name]
+		if !ok {
+			continue
 		}
+		saw = true
+		t, err := iccLut(b, span)
+		if errors.Is(err, ErrICCNotArithmetic) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		lut.Tables[i] = t
+		lut.Inputs = t.Inputs
+	}
+	if lut.Inputs > 0 {
+		// The way back from the connection space is not a transform this
+		// package offers; it is read only to ask the profile where its
+		// own black lies, which needs both directions.
+		if span, ok := tags["B2A0"]; ok {
+			if back, err := iccLut(b, span); err == nil {
+				lut.Black = iccBlackPoint(back, lut.Table(ICCRelativeColorimetric))
+			}
+		}
+		return &lut, nil
+	}
+	if saw {
+		return nil, ErrICCNotArithmetic
 	}
 
 	if _, ok := tags["kTRC"]; ok {
