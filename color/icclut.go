@@ -6,7 +6,10 @@
 
 package color
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // This file reads the transform icc.go declines: the one held as a
 // multi-dimensional lookup table. It is what a CMYK profile carries, because
@@ -283,7 +286,7 @@ func iccLut(b []byte, s iccSpan) (*ICCLut, error) {
 	case "mft2":
 		bits = 16
 	default:
-		return nil, ErrICCNotArithmetic
+		return nil, fmt.Errorf("%w: a %q lookup table", ErrICCNotArithmetic, string(b[s.off:s.off+4]))
 	}
 	pcs, err := iccPCS(b, bits)
 	if err != nil {

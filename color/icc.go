@@ -9,6 +9,7 @@ package color
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 )
 
@@ -26,10 +27,18 @@ import (
 // it did before, and know that it did.
 
 // ErrICCNotArithmetic is returned by [ReadICC] for a profile this package
-// cannot reduce to curves and a matrix -- most often one whose transform is a
-// lookup table. It is not a malformed profile; it is a profile that needs an
-// engine.
-var ErrICCNotArithmetic = errors.New("color: ICC profile is not a matrix and tone curves")
+// cannot read. It is not a malformed profile; it is one written in a shape
+// nothing here understands.
+//
+// **It always comes wrapped in the reason**, so a caller can say which shape
+// it met rather than only that it met one. A refusal that cannot name what it
+// refused is indistinguishable from a refusal to look:
+//
+//	profile, err := ReadICC(b)
+//	if errors.Is(err, ErrICCNotArithmetic) {
+//		log.Printf("falling back: %v", err)  // names the tag
+//	}
+var ErrICCNotArithmetic = errors.New("color: ICC profile is in a shape this package does not read")
 
 // ErrICCMalformed is returned by [ReadICC] for bytes that are not an ICC
 // profile, or are one that has been truncated.
@@ -142,6 +151,10 @@ func ReadICC(b []byte) (any, error) {
 	// answering a question the profile did not ask.
 	var lut ICCLutProfile
 	saw := false
+	// The FIRST reason a table was declined, kept because the loop carries on
+	// to the next intent and would otherwise throw away the only sentence
+	// that names what the profile actually holds.
+	var why error
 	for i, name := range []string{"A2B0", "A2B1", "A2B2"} {
 		span, ok := tags[name]
 		if !ok {
@@ -150,6 +163,9 @@ func ReadICC(b []byte) (any, error) {
 		saw = true
 		t, err := iccLut(b, span)
 		if errors.Is(err, ErrICCNotArithmetic) {
+			if why == nil {
+				why = err
+			}
 			continue
 		}
 		if err != nil {
@@ -170,7 +186,8 @@ func ReadICC(b []byte) (any, error) {
 		return &lut, nil
 	}
 	if saw {
-		return nil, ErrICCNotArithmetic
+		// Every A2B tag present took the branch above, so why is set.
+		return nil, why
 	}
 
 	if _, ok := tags["kTRC"]; ok {
@@ -193,7 +210,7 @@ func ReadICC(b []byte) (any, error) {
 	for i, name := range [3]string{"rXYZ", "gXYZ", "bXYZ"} {
 		span, ok := tags[name]
 		if !ok {
-			return nil, ErrICCNotArithmetic
+			return nil, fmt.Errorf("%w: no colorants and no lookup table", ErrICCNotArithmetic)
 		}
 		c, err := iccXYZ(b, span)
 		if err != nil {
@@ -204,7 +221,7 @@ func ReadICC(b []byte) (any, error) {
 	for i, name := range [3]string{"rTRC", "gTRC", "bTRC"} {
 		span, ok := tags[name]
 		if !ok {
-			return nil, ErrICCNotArithmetic
+			return nil, fmt.Errorf("%w: colorants with no %s curve", ErrICCNotArithmetic, name)
 		}
 		c, err := iccCurve(b, span)
 		if err != nil {
@@ -295,7 +312,7 @@ func iccCurve(b []byte, s iccSpan) (Curve, error) {
 		}
 		return pts, nil
 	case "para":
-		return nil, ErrICCNotArithmetic
+		return nil, fmt.Errorf("%w: a parametric curve", ErrICCNotArithmetic)
 	}
-	return nil, ErrICCNotArithmetic
+	return nil, fmt.Errorf("%w: a %q curve", ErrICCNotArithmetic, string(b[s.off:s.off+4]))
 }
