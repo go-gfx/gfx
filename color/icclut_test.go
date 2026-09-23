@@ -11,6 +11,7 @@ import (
 	"errors"
 	"math"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -583,4 +584,58 @@ func withUint16(b []byte, at int, v uint16) []byte {
 	out := append([]byte(nil), b...)
 	binary.BigEndian.PutUint16(out[at:at+2], v)
 	return out
+}
+
+// TestARefusalNamesWhatItRefused. A caller that meets one of these has to fall
+// back, and what it can SAY about the fallback is the difference between a
+// known limit and a shrug. Each message is checked for the artefact it names,
+// because a refusal that cannot name what it refused is indistinguishable from
+// a refusal to look.
+func TestARefusalNamesWhatItRefused(t *testing.T) {
+	opaque := func(sig string) []byte {
+		d := make([]byte, 40)
+		copy(d, sig)
+		return d
+	}
+	for _, c := range []struct {
+		name    string
+		profile []byte
+		names   string
+	}{
+		{"a version 4 lookup table", lutProfileBytes(4, "prtr", "CMYK", "Lab ",
+			map[string][]byte{"A2B0": opaque("mAB ")}), `"mAB " lookup table`},
+		{"a parametric curve", lutProfileBytes(2, "mntr", "RGB ", "XYZ ", map[string][]byte{
+			"rXYZ": xyzTag(0.4, 0.2, 0), "gXYZ": xyzTag(0.3, 0.7, 0.1), "bXYZ": xyzTag(0.2, 0.1, 0.7),
+			"rTRC": opaque("para"), "gTRC": opaque("para"), "bTRC": opaque("para"),
+		}), "parametric curve"},
+		{"a curve type nothing knows", lutProfileBytes(2, "mntr", "RGB ", "XYZ ", map[string][]byte{
+			"rXYZ": xyzTag(0.4, 0.2, 0), "gXYZ": xyzTag(0.3, 0.7, 0.1), "bXYZ": xyzTag(0.2, 0.1, 0.7),
+			"rTRC": opaque("zzzz"), "gTRC": opaque("zzzz"), "bTRC": opaque("zzzz"),
+		}), `"zzzz" curve`},
+		{"no colorants at all", lutProfileBytes(2, "mntr", "RGB ", "XYZ ",
+			map[string][]byte{"desc": opaque("desc")}), "no colorants and no lookup table"},
+		{"colorants with a curve missing", lutProfileBytes(2, "mntr", "RGB ", "XYZ ", map[string][]byte{
+			"rXYZ": xyzTag(0.4, 0.2, 0), "gXYZ": xyzTag(0.3, 0.7, 0.1), "bXYZ": xyzTag(0.2, 0.1, 0.7),
+			"rTRC": opaque("curv"),
+		}), "no gTRC curve"},
+	} {
+		_, err := ReadICC(c.profile)
+		if !errors.Is(err, ErrICCNotArithmetic) {
+			t.Errorf("%s: err = %v, want ErrICCNotArithmetic", c.name, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.names) {
+			t.Errorf("%s: err = %q, want it to name %q", c.name, err, c.names)
+		}
+	}
+}
+
+// xyzTag is an XYZType tag, whose numbers are s15Fixed16.
+func xyzTag(x, y, z float64) []byte {
+	d := make([]byte, 20)
+	copy(d, "XYZ ")
+	for i, v := range []float64{x, y, z} {
+		binary.BigEndian.PutUint32(d[8+i*4:], uint32(int32(math.Round(v*65536))))
+	}
+	return d
 }
