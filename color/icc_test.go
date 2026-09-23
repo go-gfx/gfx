@@ -59,6 +59,11 @@ func (b *iccBuilder) raw(sig string, typ string, extra int) {
 	b.tags = append(b.tags, iccTagIn{sig, d})
 }
 
+// raw2 appends a tag whose bytes the caller has already written whole.
+func (b *iccBuilder) raw2(sig string, d []byte) {
+	b.tags = append(b.tags, iccTagIn{sig, d})
+}
+
 func (b *iccBuilder) bytes() []byte {
 	head := make([]byte, 132)
 	copy(head[16:20], b.space)
@@ -286,14 +291,16 @@ func TestAProfileThatNeedsAnEngineIsDeclined(t *testing.T) {
 			b.raw("A2B0", "mAB ", 64)
 			return b.bytes()
 		},
-		"a parametric curve": func() []byte {
+		"a parametric curve of a shape ICC does not define": func() []byte {
+			// The five it DOES define are read; see
+			// TestEveryParametricShapeIsReadAsItsOwnFormula.
 			b := &iccBuilder{space: "RGB ", pcs: "XYZ "}
 			b.xyz("rXYZ", 0.4, 0.2, 0.0)
 			b.xyz("gXYZ", 0.3, 0.7, 0.1)
 			b.xyz("bXYZ", 0.2, 0.1, 0.7)
-			b.raw("rTRC", "para", 8)
-			b.raw("gTRC", "para", 8)
-			b.raw("bTRC", "para", 8)
+			b.raw2("rTRC", paraTag(7, 1))
+			b.raw2("gTRC", paraTag(7, 1))
+			b.raw2("bTRC", paraTag(7, 1))
 			return b.bytes()
 		},
 		"no colorants at all": func() []byte {
@@ -493,4 +500,105 @@ func TestEveryWayAProfileCanBeMalformedInATagThatIsRead(t *testing.T) {
 			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
 		}
 	}
+}
+
+// TestTheSRGBCurveWrittenAsAFormulaIsTheSRGBCurve is the witness this file can
+// give itself: shape 3 with sRGB's own coefficients is not an approximation of
+// [SRGBToLinear], it is the same function, and a profile that writes it that
+// way deserves the same answer to the last bit.
+func TestTheSRGBCurveWrittenAsAFormulaIsTheSRGBCurve(t *testing.T) {
+	srgb := ParametricCurve{Shape: 3,
+		G: 2.4, A: 1 / 1.055, B: 0.055 / 1.055, C: 1 / 12.92, D: 0.04045}
+	worst := 0.0
+	for i := range 10001 {
+		x := float64(i) / 10000
+		if d := math.Abs(srgb.At(x) - SRGBToLinear(x)); d > worst {
+			worst = d
+		}
+	}
+	if worst > 1e-15 {
+		t.Errorf("worst disagreement with SRGBToLinear over 10001 points: %g", worst)
+	}
+}
+
+// TestEveryParametricShapeIsReadAsItsOwnFormula walks the five, each at a
+// point either side of where it breaks, because the shapes differ in WHERE
+// they break and not only in their coefficients.
+func TestEveryParametricShapeIsReadAsItsOwnFormula(t *testing.T) {
+	for _, c := range []struct {
+		shape  int
+		params []float64
+		at     float64
+		want   float64
+	}{
+		// Every coefficient here is a whole number of 1/65536, because that
+		// is what s15Fixed16 can hold: 0.1 comes back as 0.100006 and the
+		// disagreement would be the format's, not the reading's.
+		{0, []float64{2}, 0.5, 0.25},
+		{1, []float64{2, 2, -0.5}, 0.75, 1},
+		{1, []float64{2, 2, -0.5}, 0.1, 0},
+		{2, []float64{2, 2, -0.5, 0.125}, 0.75, 1},
+		{2, []float64{2, 2, -0.5, 0.125}, 0.1, 0.125},
+		{3, []float64{2, 1, 0, 0.5, 0.25}, 0.5, 0.25},
+		{3, []float64{2, 1, 0, 0.5, 0.25}, 0.125, 0.0625},
+		// A curve that leans DOWNWARDS: past its break the base of the power
+		// turns negative, and a negative base under a fractional exponent is
+		// not a number. It is nought, which is what the curve is describing.
+		{1, []float64{2, -1, 0.5}, 0.75, 0},
+		{4, []float64{2, 1, 0, 0.5, 0.25, 0.125, 0.0625}, 0.5, 0.375},
+		{4, []float64{2, 1, 0, 0.5, 0.25, 0.125, 0.0625}, 0.125, 0.125},
+	} {
+		b := &iccBuilder{space: "RGB ", pcs: "XYZ "}
+		b.xyz("rXYZ", 0.4, 0.2, 0)
+		b.xyz("gXYZ", 0.3, 0.7, 0.1)
+		b.xyz("bXYZ", 0.2, 0.1, 0.7)
+		tag := paraTag(c.shape, c.params...)
+		b.raw2("rTRC", tag)
+		b.raw2("gTRC", tag)
+		b.raw2("bTRC", tag)
+		p, err := ReadICC(b.bytes())
+		if err != nil {
+			t.Fatalf("shape %d: %v", c.shape, err)
+		}
+		got := p.(*ICCMatrixTRC).Curves[0].At(c.at)
+		if math.Abs(got-c.want) > 1e-12 {
+			t.Errorf("shape %d at %.3f = %.6f, want %.6f", c.shape, c.at, got, c.want)
+		}
+	}
+}
+
+func TestAParametricCurveThatIsNotOneOfTheFive(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		tag  []byte
+		want error
+	}{
+		{"a sixth shape", paraTag(5, 1), ErrICCNotArithmetic},
+		{"shorter than its own header", paraTag(0)[:10], ErrICCMalformed},
+		{"fewer coefficients than its shape needs", paraTag(4, 1, 1, 1), ErrICCMalformed},
+	} {
+		b := &iccBuilder{space: "RGB ", pcs: "XYZ "}
+		b.xyz("rXYZ", 0.4, 0.2, 0)
+		b.xyz("gXYZ", 0.3, 0.7, 0.1)
+		b.xyz("bXYZ", 0.2, 0.1, 0.7)
+		b.raw2("rTRC", c.tag)
+		b.raw2("gTRC", c.tag)
+		b.raw2("bTRC", c.tag)
+		if _, err := ReadICC(b.bytes()); !errors.Is(err, c.want) {
+			t.Errorf("%s: err = %v, want %v", c.name, err, c.want)
+		}
+	}
+}
+
+// paraTag writes a parametricCurveType of the shape and coefficients given.
+// It writes exactly the coefficients it is handed, so a test can hand it too
+// few on purpose.
+func paraTag(shape int, params ...float64) []byte {
+	d := make([]byte, 12+len(params)*4)
+	copy(d, "para")
+	binary.BigEndian.PutUint16(d[8:], uint16(shape))
+	for i, v := range params {
+		binary.BigEndian.PutUint32(d[12+i*4:], uint32(int32(math.Round(v*65536))))
+	}
+	return d
 }

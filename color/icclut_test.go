@@ -604,10 +604,10 @@ func TestARefusalNamesWhatItRefused(t *testing.T) {
 	}{
 		{"a version 4 lookup table", lutProfileBytes(4, "prtr", "CMYK", "Lab ",
 			map[string][]byte{"A2B0": opaque("mAB ")}), `"mAB " lookup table`},
-		{"a parametric curve", lutProfileBytes(2, "mntr", "RGB ", "XYZ ", map[string][]byte{
+		{"a parametric curve of a shape ICC does not define", lutProfileBytes(2, "mntr", "RGB ", "XYZ ", map[string][]byte{
 			"rXYZ": xyzTag(0.4, 0.2, 0), "gXYZ": xyzTag(0.3, 0.7, 0.1), "bXYZ": xyzTag(0.2, 0.1, 0.7),
-			"rTRC": opaque("para"), "gTRC": opaque("para"), "bTRC": opaque("para"),
-		}), "parametric curve"},
+			"rTRC": paraTag(9, 1), "gTRC": paraTag(9, 1), "bTRC": paraTag(9, 1),
+		}), "parametric curve of shape 9"},
 		{"a curve type nothing knows", lutProfileBytes(2, "mntr", "RGB ", "XYZ ", map[string][]byte{
 			"rXYZ": xyzTag(0.4, 0.2, 0), "gXYZ": xyzTag(0.3, 0.7, 0.1), "bXYZ": xyzTag(0.2, 0.1, 0.7),
 			"rTRC": opaque("zzzz"), "gTRC": opaque("zzzz"), "bTRC": opaque("zzzz"),

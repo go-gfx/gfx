@@ -286,9 +286,8 @@ func iccXYZ(b []byte, s iccSpan) (XYZ, error) {
 // iccCurve reads a curveType tag. Nought points is the identity, one point is
 // a gamma written as u8Fixed8, and more are the curve itself.
 //
-// A parametricCurveType is declined rather than guessed at: it is a different
-// tag with its own five shapes, and returning the wrong one silently would be
-// worse than saying no.
+// A parametricCurveType is read by [iccParametric]: it is a different tag with
+// its own five shapes, and each of them is a closed formula.
 func iccCurve(b []byte, s iccSpan) (Curve, error) {
 	switch string(b[s.off : s.off+4]) {
 	case "curv":
@@ -312,7 +311,98 @@ func iccCurve(b []byte, s iccSpan) (Curve, error) {
 		}
 		return pts, nil
 	case "para":
-		return nil, fmt.Errorf("%w: a parametric curve", ErrICCNotArithmetic)
+		return iccParametric(b, s)
 	}
 	return nil, fmt.Errorf("%w: a %q curve", ErrICCNotArithmetic, string(b[s.off:s.off+4]))
+}
+
+// ParametricCurve is a tone curve given as a formula rather than as points.
+// ICC defines five, and they are one formula with pieces switched off:
+//
+//	0:  Y = X^g
+//	1:  Y = (aX + b)^g          for X >= -b/a, else 0
+//	2:  Y = (aX + b)^g + c      for X >= -b/a, else c
+//	3:  Y = (aX + b)^g          for X >= d,    else cX
+//	4:  Y = (aX + b)^g + e      for X >= d,    else cX + f
+//
+// Shape 3 is the sRGB transfer function written exactly: g = 2.4, a = 1/1.055,
+// b = 0.055/1.055, c = 1/12.92, d = 0.04045. A profile that says that is not
+// approximating sRGB, it IS sRGB, and reading it as anything else is a choice
+// nobody asked for.
+type ParametricCurve struct {
+	// G, A, B, C, D, E, F are the coefficients above. A shape that does not
+	// use one leaves it at nought, which is what the format means by a
+	// shorter tag.
+	G, A, B, C, D, E, F float64
+	// Shape is the ICC function type, 0 to 4. It is kept because the shapes
+	// differ in where the curve BREAKS, not only in their coefficients, and
+	// -b/a is not d.
+	Shape int
+}
+
+// At implements [Curve].
+func (p ParametricCurve) At(v float64) float64 {
+	x := clamp01(v)
+	// Where the curve breaks: the first three shapes break where the base of
+	// the power turns negative, the last two where the profile says.
+	brk := p.D
+	if p.Shape < 3 {
+		brk = 0
+		if p.A != 0 {
+			brk = -p.B / p.A
+		}
+	}
+	if x < brk {
+		switch p.Shape {
+		case 0, 1:
+			return 0
+		case 2:
+			return clamp01(p.C)
+		case 3:
+			return clamp01(p.C * x)
+		}
+		return clamp01(p.C*x + p.F)
+	}
+	base := p.A*x + p.B
+	if p.Shape == 0 {
+		base = x
+	}
+	if base < 0 {
+		base = 0
+	}
+	y := math.Pow(base, p.G)
+	switch p.Shape {
+	case 2:
+		y += p.C
+	case 4:
+		y += p.E
+	}
+	return clamp01(y)
+}
+
+// iccParametric reads a parametricCurveType tag. Each shape takes a fixed
+// number of coefficients, and a tag that carries fewer than its shape needs is
+// malformed rather than defaulted: the missing one would be nought, and nought
+// is a meaningful value for every one of them.
+func iccParametric(b []byte, s iccSpan) (Curve, error) {
+	if s.size < 12 {
+		return nil, ErrICCMalformed
+	}
+	shape := int(binary.BigEndian.Uint16(b[s.off+8 : s.off+10]))
+	counts := []int{1, 3, 4, 5, 7}
+	if shape >= len(counts) {
+		return nil, fmt.Errorf("%w: a parametric curve of shape %d", ErrICCNotArithmetic, shape)
+	}
+	n := counts[shape]
+	if uint64(s.size) < 12+uint64(n)*4 {
+		return nil, ErrICCMalformed
+	}
+	v := make([]float64, 7)
+	for i := range n {
+		o := s.off + 12 + uint32(i)*4
+		v[i] = float64(int32(binary.BigEndian.Uint32(b[o:o+4]))) / 65536.0
+	}
+	return ParametricCurve{
+		G: v[0], A: v[1], B: v[2], C: v[3], D: v[4], E: v[5], F: v[6], Shape: shape,
+	}, nil
 }
