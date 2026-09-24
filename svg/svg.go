@@ -517,7 +517,12 @@ func (r *renderer) render(n *xnode, parent state) {
 	}
 
 	switch n.XMLName.Local {
-	case "path", "rect", "circle", "ellipse", "polygon", "polyline":
+	// ⛔ The shape elements are named HERE and again in shapePath, and both
+	// lists must agree. A name present in one and missing from the other is
+	// not an error anywhere: the element is walked and then dropped, or never
+	// walked at all, and either way it is simply not painted. <line> was
+	// missing from both; <ellipse> was missing until v0.24.0.
+	case "path", "rect", "circle", "ellipse", "polygon", "polyline", "line":
 		if st.paint || st.strokeOn {
 			if p, ok := r.shapePath(n, st); ok {
 				r.fillPath(p, st)
@@ -658,8 +663,34 @@ func (r *renderer) shapePath(n *xnode, st state) (*vector.Path, bool) {
 		return polyPath(n, st, true)
 	case "polyline":
 		return polyPath(n, st, false)
+	case "line":
+		return linePath(n, st)
 	}
 	return nil, false
+}
+
+// linePath builds a <line>. It is an open two-point path, so it shows only
+// under a stroke -- SVG 1.1 11.2 gives it no interior for a fill to find.
+//
+// ⛔ It was absent from the switch above, and a shape that is absent is not
+// rejected: shapePath returns false and the element is dropped in silence.
+// That is the second time -- <ellipse> was missing until v0.24.0 and a logo's
+// disc disappeared the same way -- so line_test.go asserts PIXELS rather than
+// parsing, which is the only kind of test that can tell the two apart.
+func linePath(n *xnode, st state) (*vector.Path, bool) {
+	x1 := parseLen(n.attrOr("x1", "0"), st.vpW)
+	y1 := parseLen(n.attrOr("y1", "0"), st.vpH)
+	x2 := parseLen(n.attrOr("x2", "0"), st.vpW)
+	y2 := parseLen(n.attrOr("y2", "0"), st.vpH)
+	if x1 == x2 && y1 == y2 {
+		return nil, false
+	}
+	p := vector.NewPath()
+	ax, ay := st.m.apply(x1, y1)
+	bx, by := st.m.apply(x2, y2)
+	p.MoveTo(ax, ay)
+	p.LineTo(bx, by)
+	return p, true
 }
 
 // rectPath builds a <rect>, rounded when rx or ry says so.
