@@ -27,11 +27,24 @@ import (
 // per-decode, so the day it is swapped should be a change in one place.
 //
 // The decoder is a fork, which is not the usual arrangement here and is meant
-// to end. Upstream's per-symbol pixel cap defaults below what real scanned
-// documents contain: it refuses 7 of 403 JBIG2 streams taken from public
-// scans, and a library cannot raise it, because the limits are those
-// process-global variables. The fix is offered as dkrisman/gobig2#2 and the
-// fork exists to carry it, tagged, until it lands.
+// to end. It carries two changes, and both are the same shape: a resource cap
+// calibrated on a population that does not include real scanned books, and no
+// way for a library to raise it, because the limits are process-global
+// variables.
+//
+//   - the PER-SYMBOL cap, 4 MP, which refuses 7 of 403 streams taken from
+//     public scans. Some encoders emit a page-sized region as one symbol.
+//     Offered upstream as dkrisman/gobig2#2.
+//   - the AGGREGATE cap, 16 MP, which refuses 3 of 866. Those encoders emit
+//     thousands of near-duplicate symbols off a noisy scan, so the aggregate
+//     is a MULTIPLE of the page rather than a fraction of it -- up to 64 MP
+//     for a 6 MP page. Refused, the /Mask that shapes a scanned page's ink
+//     layer is dropped and the page is drawn from its background alone: 59%
+//     of pixels away from poppler on one of them.
+//
+// poppler reads all of them at its own defaults. Both caps stay configurable,
+// and the seed that motivated the aggregate one -- 198 MP across 538 symbols
+// -- is still refused.
 //
 // globals may be nil, which is the common case: an encoder that puts a page's
 // symbol dictionary in the page's own stream needs no shared segments.
