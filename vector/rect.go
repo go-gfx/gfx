@@ -4,6 +4,8 @@
 
 package vector
 
+import "math"
+
 // A Rect is an axis-aligned rectangle whose coverage is worked out rather than
 // rasterised.
 //
@@ -43,6 +45,43 @@ func (r Rect) Box(clampW, clampH int) (ox, oy, w, h int, ok bool) {
 		return 0, 0, 0, 0, false
 	}
 	return clampBox(r.X0, r.Y0, r.X1, r.Y1, clampW, clampH)
+}
+
+// Whole is the box of pixels the rectangle covers ENTIRELY, where [Rect.At]
+// returns exactly 1. A caller that asks about many pixels -- a clip consulted
+// once per pixel painted through it -- answers most of them with two
+// comparisons and no arithmetic at all.
+//
+// ok=false when there is no such pixel, which is every rectangle thinner than
+// one in either direction.
+func (r Rect) Whole(clampW, clampH int) (ox, oy, w, h int, ok bool) {
+	// Horizontally a pixel is whole when the rectangle spans it edge to edge.
+	x0 := int(math.Ceil(r.X0))
+	x1 := int(math.Floor(r.X1))
+	// Vertically it is whole when every sub-scanline of it is inside, and
+	// they sit at y+(s+0.5)/pathSS: the first is at y+0.5/pathSS and the last
+	// at y+1-0.5/pathSS, so the row is whole when those two are.
+	const half = 0.5 / pathSS
+	// Row y is whole when its first sub-scanline, at y+half, is at or past
+	// Y0, and its last, at y+1-half, is before Y1.
+	y0 := int(math.Ceil(r.Y0 - half))
+	y1 := int(math.Ceil(r.Y1 - 1 + half))
+	if x0 < 0 {
+		x0 = 0
+	}
+	if y0 < 0 {
+		y0 = 0
+	}
+	if x1 > clampW {
+		x1 = clampW
+	}
+	if y1 > clampH {
+		y1 = clampH
+	}
+	if x1 <= x0 || y1 <= y0 {
+		return 0, 0, 0, 0, false
+	}
+	return x0, y0, x1 - x0, y1 - y0, true
 }
 
 // At is how much of pixel (px,py) the rectangle covers, 0..1.
