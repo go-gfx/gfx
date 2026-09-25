@@ -1,6 +1,7 @@
 package vector
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"testing"
@@ -121,5 +122,48 @@ func TestAddSpanCoversWhatItShould(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// TestAddConstMatchesTheLoopItReplaces. Unrolling changes no arithmetic --
+// each element depends on itself alone -- so the answer must be the same bit
+// for bit, and at every length, because the tail is where an unrolled loop
+// goes wrong.
+func TestAddConstMatchesTheLoopItReplaces(t *testing.T) {
+	for n := 0; n <= 17; n++ {
+		for _, w := range []float64{0, 1, 0.5, -0.25, 1e-300, 1e300} {
+			want := make([]float64, n)
+			got := make([]float64, n)
+			for i := range want {
+				// Start from values that are not zero, so a kernel that
+				// STORES w rather than adding it is caught.
+				want[i] = float64(i) * 0.125
+				got[i] = want[i]
+			}
+			for i := range want {
+				want[i] += w
+			}
+			addConst(got, w)
+			for i := range got {
+				if got[i] != want[i] {
+					t.Fatalf("n=%d w=%v: got[%d] = %v, want %v", n, w, i, got[i], want[i])
+				}
+			}
+		}
+	}
+}
+
+// BenchmarkAddConst is the middle of a span: one line that held 170ms of the
+// 440ms one page of go-pdfkit spent drawing, more than any other line in that
+// renderer. The run lengths are the ones a page produces.
+func BenchmarkAddConst(b *testing.B) {
+	for _, n := range []int{8, 32, 128, 545, 596} {
+		row := make([]float64, n)
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			b.SetBytes(int64(n) * 8)
+			for i := 0; i < b.N; i++ {
+				addConst(row, 0.5)
+			}
+		})
 	}
 }

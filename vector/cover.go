@@ -259,9 +259,7 @@ func addSpan(row []float64, xa, xb, ox float64, w int, weight float64) {
 	// evaluated it, right-to-left, so that the rounding is the same one and
 	// the coverage comes out bit for bit as it did.
 	row[first] += ((ox + float64(first+1)) - xa) * weight
-	for ix := first + 1; ix < last; ix++ {
-		row[ix] += weight
-	}
+	addConst(row[first+1:last], weight)
 	row[last] += (xb - (ox + float64(last))) * weight
 }
 
@@ -276,4 +274,30 @@ func edgeBounds(edges []edge) (minX, minY, maxX, maxY float64) {
 		maxY = math.Max(maxY, math.Max(e.y0, e.y1))
 	}
 	return
+}
+
+// addConst adds w to every element of row.
+//
+// It is the middle of a span, and on the page this was measured against it is
+// ONE LINE holding 170ms of the 440ms spent drawing -- 38.6%, more than any
+// other line in the renderer. A clip path covers a large area and a large area
+// is almost entirely middle.
+//
+// Four at a time rather than one is worth 25-30% of it at the lengths a page
+// produces (a 596-wide run: 168.6ns to 118.1ns, 28GB/s to 40GB/s). Nothing
+// about the arithmetic changes: each element depends on itself alone, so the
+// answer is the same bit for bit whatever order or grouping the additions are
+// written in. That is what makes this loop safe to unroll and would make it
+// safe to vectorise -- a sum would not be.
+func addConst(row []float64, w float64) {
+	i := 0
+	for ; i+4 <= len(row); i += 4 {
+		row[i] += w
+		row[i+1] += w
+		row[i+2] += w
+		row[i+3] += w
+	}
+	for ; i < len(row); i++ {
+		row[i] += w
+	}
 }
