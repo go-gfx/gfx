@@ -108,3 +108,64 @@ func TestRectBoxRefusesAnEmptyRectangle(t *testing.T) {
 		}
 	}
 }
+
+// TestRectWholeIsSoundAndComplete. Whole is an optimisation: a caller trusts
+// it and skips the arithmetic, so a pixel it claims that is not entirely
+// covered is a wrong picture. It is checked against At at every pixel of the
+// box Fill would produce -- both directions, because a Whole that claimed
+// nothing would be sound and useless.
+func TestRectWholeIsSoundAndComplete(t *testing.T) {
+	const clampW, clampH = 40, 30
+	rz := &Rasterizer{}
+	claimed, whole := 0, 0
+
+	check := func(name string, r Rect) {
+		t.Helper()
+		_, ox, oy, w, h, ok := fillRect(t, rz, r, clampW, clampH)
+		if !ok {
+			return
+		}
+		wx, wy, ww, wh, wok := r.Whole(clampW, clampH)
+		for y := oy; y < oy+h; y++ {
+			for x := ox; x < ox+w; x++ {
+				in := wok && x >= wx && x < wx+ww && y >= wy && y < wy+wh
+				at := r.At(x, y)
+				if in {
+					claimed++
+					if at != 1 {
+						t.Fatalf("%s %+v: Whole claims (%d,%d) but At = %.17g", name, r, x, y, at)
+					}
+				}
+				if at == 1 {
+					whole++
+					if !in {
+						t.Fatalf("%s %+v: At(%d,%d) = 1 and Whole leaves it out", name, r, x, y)
+					}
+				}
+			}
+		}
+	}
+
+	check("pixel-aligned", Rect{2, 3, 12, 9})
+	check("fractional", Rect{2.37, 3.11, 12.62, 9.83})
+	check("thin in x", Rect{5.2, 3, 5.4, 9})
+	check("thin in y", Rect{2, 5.2, 12, 5.4})
+	check("off the left", Rect{-8, 3, 6, 9})
+	check("larger than the surface", Rect{-10, -10, 90, 90})
+	for _, e := range []float64{0, 0.125, 0.375, 0.5, 0.625, 0.875, 1} {
+		check("edge on a sub-scanline", Rect{2, 4 + e, 12, 8 + e})
+	}
+	rnd := rand.New(rand.NewSource(5))
+	for i := 0; i < 400; i++ {
+		x0 := rnd.Float64()*50 - 5
+		y0 := rnd.Float64()*40 - 5
+		check("random", Rect{x0, y0, x0 + rnd.Float64()*20, y0 + rnd.Float64()*15})
+	}
+	if claimed != whole {
+		t.Errorf("Whole claims %d pixels, At says %d are covered entirely", claimed, whole)
+	}
+	if claimed < 5000 {
+		t.Errorf("only %d pixels claimed; the optimisation would not pay", claimed)
+	}
+	t.Logf("%d pixels covered entirely, all of them claimed", claimed)
+}
