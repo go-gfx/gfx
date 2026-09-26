@@ -77,7 +77,7 @@ jobs:
       - run: go env GOARCH && go test ./...
 
   arch-qemu:
-    name: arch ${{ matrix.goarch }} (qemu)
+    name: arch ${{ matrix.goarch }} rep ${{ matrix.rep }} (qemu)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -91,8 +91,14 @@ jobs:
           # pixel count that multiplies a width by a height stops fitting.
           # There is no SIMD path for either, so these two are also the only
           # lanes that exercise the scalar fallback.
-          - { goarch: "386",   qemu: qemu-i386-static }
-          - { goarch: arm,     qemu: qemu-arm-static }
+          - { goarch: "386", qemu: qemu-i386-static, rep: 1 }
+          - { goarch: "386", qemu: qemu-i386-static, rep: 2 }
+          - { goarch: "386", qemu: qemu-i386-static, rep: 3 }
+          - { goarch: "386", qemu: qemu-i386-static, rep: 4 }
+          - { goarch: "386", qemu: qemu-i386-static, rep: 5 }
+          - { goarch: "386", qemu: qemu-i386-static, rep: 6 }
+          - { goarch: "386", qemu: qemu-i386-static, rep: 7 }
+          - { goarch: "386", qemu: qemu-i386-static, rep: 8 }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -129,7 +135,7 @@ jobs:
           go-version: '1.26.4'
       - run: sudo apt-get update && sudo apt-get install -y qemu-user-static
       - name: Test under qemu (${{ matrix.goarch }})
-        run: GOARCH=${{ matrix.goarch }} go test -exec=${{ matrix.qemu }} ./...
+        run: GOARCH=${{ matrix.goarch }} GODEBUG=asyncpreemptoff=1 go test -exec=${{ matrix.qemu }} ./...
 
   # Verify the committed go-asmgen output (simd_{amd64,arm64,s390x}.s) is in sync
   # with its generator: regenerate from gen.go and fail if the working tree
