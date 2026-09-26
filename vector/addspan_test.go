@@ -42,7 +42,31 @@ func addSpanGeneral(row []float64, xa, xb, ox float64, w int, weight float64) {
 // that fall inside a single pixel, ones that straddle two, ones that cover a
 // whole row, ones that begin and end exactly on a pixel boundary, and ones
 // that hang off both ends and have to be clipped.
+// probeCase records the span about to be drawn. It is package-level on purpose:
+// wrapping the call in a closure was enough to make the 386 panic VANISH, so
+// nothing may be added at the call site itself.
+var probeW int
+var probeOx, probeXa, probeXb, probeWeight float64
+
 func TestAddSpanIsBitIdentical(t *testing.T) {
+	defer func() {
+		if e := recover(); e != nil {
+			xa, xb, ox, w := probeXa, probeXb, probeOx, probeW
+			if xa < ox {
+				xa = ox
+			}
+			if hi := ox + float64(w); xb > hi {
+				xb = hi
+			}
+			panic(fmt.Sprintf("PROBE w=%d ox=%#x xa=%#x xb=%#x weight=%v || clamped xa=%#x xb=%#x "+
+				"|| xa-ox=%#x xb-ox=%#x || floor=%#x ceil=%#x || first=%d last=%d || %v",
+				w, math.Float64bits(probeOx), math.Float64bits(probeXa), math.Float64bits(probeXb), probeWeight,
+				math.Float64bits(xa), math.Float64bits(xb),
+				math.Float64bits(xa-ox), math.Float64bits(xb-ox),
+				math.Float64bits(math.Floor(xa-ox)), math.Float64bits(math.Ceil(xb-ox)),
+				int(math.Floor(xa-ox)), int(math.Ceil(xb-ox))-1, e))
+		}
+	}()
 	r := rand.New(rand.NewSource(20260826))
 	widths := []int{1, 2, 3, 7, 64, 257, 1024}
 	origins := []float64{0, 1, -1, 17, -313, 4096, 1 << 20}
@@ -73,6 +97,7 @@ func TestAddSpanIsBitIdentical(t *testing.T) {
 					xb = ox + float64(w) + r.Float64()*3
 				}
 				weight := []float64{1, 0.5, 0.25, 1.0 / 3, 1.0 / 7, 1e-9, 1e9}[r.Intn(7)]
+				probeW, probeOx, probeXa, probeXb, probeWeight = w, ox, xa, xb, weight
 				addSpan(fast, xa, xb, ox, w, weight)
 				addSpanGeneral(slow, xa, xb, ox, w, weight)
 				for ix := range slow {
