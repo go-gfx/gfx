@@ -73,7 +73,20 @@ func TestAddSpanIsBitIdentical(t *testing.T) {
 					xb = ox + float64(w) + r.Float64()*3
 				}
 				weight := []float64{1, 0.5, 0.25, 1.0 / 3, 1.0 / 7, 1e-9, 1e9}[r.Intn(7)]
-				addSpan(fast, xa, xb, ox, w, weight)
+				func() {
+					defer func() {
+						if e := recover(); e != nil {
+							t.Fatalf("PROBE w=%d ox=%v(%#x) xa=%v(%#x) xb=%v(%#x) weight=%v: "+
+								"clamped xa=%#x xb=%#x hi=%#x first=%d last=%d ceil=%v(%#x) floor=%v(%#x): %v",
+								w, ox, math.Float64bits(ox), xa, math.Float64bits(xa), xb, math.Float64bits(xb), weight,
+								math.Float64bits(max(xa, ox)), math.Float64bits(min(xb, ox+float64(w))), math.Float64bits(ox+float64(w)),
+								int(math.Floor(max(xa, ox)-ox)), int(math.Ceil(min(xb, ox+float64(w))-ox))-1,
+								math.Ceil(min(xb, ox+float64(w))-ox), math.Float64bits(math.Ceil(min(xb, ox+float64(w))-ox)),
+								math.Floor(max(xa, ox)-ox), math.Float64bits(math.Floor(max(xa, ox)-ox)), e)
+						}
+					}()
+					addSpan(fast, xa, xb, ox, w, weight)
+				}()
 				addSpanGeneral(slow, xa, xb, ox, w, weight)
 				for ix := range slow {
 					if math.Float64bits(fast[ix]) != math.Float64bits(slow[ix]) {
