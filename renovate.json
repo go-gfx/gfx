@@ -1,4 +1,18 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>go-gfx/.github"]
+  "extends": [
+    "github>go-gfx/.github"
+  ],
+  "packageRules": [
+    {
+      "description": "The loong64 lane pins go1.26.4 on purpose: go1.27.0 miscompiles this package for LoongArch (golang/go#81000), established on real silicon. Renovate has reopened a bump of that pin repeatedly and it is red every time. MEASURED on 2026-09-28: the fix, CL 820040, wraps the Cvt*Fto* rules in MOVWfpgp/MOVVfpgp, and 1.27.1's LOONG64.rules still reads (Cvt64Fto32 ...) => (TRUNCDW ...) exactly as 1.26.4 does -- the CL is not in the release. Unpinning is a human decision that belongs with the comment in ci.yml, not a dependency update.",
+      "matchDatasources": [
+        "golang-version"
+      ],
+      "matchFileNames": [
+        ".github/workflows/ci.yml"
+      ],
+      "enabled": false
+    }
+  ]
 }
