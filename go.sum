@@ -1,7 +1,7 @@
 github.com/ajroetker/go-highway v0.0.12 h1:OcGp/l/W7WQtH5ELLuNnKXCuR7ePpWGh2RWZI/INtck=
 github.com/ajroetker/go-highway v0.0.12/go.mod h1:un7fcrwix7UOHJrr18Lgh5eeF+1yaZiGWdTw3FbfDv4=
-github.com/go-images/jpeg2000 v0.8.0 h1:IddjqEFuSymQAsfQuQtXzABlElFEG4XTjfm17KOk088=
-github.com/go-images/jpeg2000 v0.8.0/go.mod h1:Qqxz1gBrUwFDBOGkA4RGyTsX7wifr0wvaTQ7k8FK0wY=
+github.com/go-images/jpeg2000 v0.13.2 h1:wthA3iZkyqWXzNXxd6EjjsrsQ7GOYX7vYZbaI4vU6+I=
+github.com/go-images/jpeg2000 v0.13.2/go.mod h1:Qqxz1gBrUwFDBOGkA4RGyTsX7wifr0wvaTQ7k8FK0wY=
 github.com/sergeymakinen/go-bmp v1.0.0 h1:SdGTzp9WvCV0A1V0mBeaS7kQAwNLdVJbmHlqNWq0R+M=
 github.com/sergeymakinen/go-bmp v1.0.0/go.mod h1:/mxlAQZRLxSvJFNIEGGLBE/m40f3ZnUifpgVDlcUIEY=
 github.com/sergeymakinen/go-ico v1.0.0 h1:uL3khgvKkY6WfAetA+RqsguClBuu7HpvBB/nq/Jvr80=
