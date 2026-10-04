@@ -1,6 +1,6 @@
 module github.com/go-gfx/gfx
 
-go 1.26.4
+go 1.27.1
 
 require (
 	github.com/sergeymakinen/go-ico v1.0.0
