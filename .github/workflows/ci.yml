@@ -79,19 +79,17 @@ jobs:
   arch-qemu:
     name: arch ${{ matrix.goarch }} (${{ matrix.via }})
     runs-on: ubuntu-latest
-    # loong64 is ADVISORY until Go 1.27.2 (2026-10-05). The floor moved to
-    # go1.27.1 fleet-wide with this known risk accepted: go1.27.0/1.27.1
-    # miscompile this package on loong64 (golang/go#81000, see the comment at
-    # setup-go below). The fix is backported for 1.27.2 (golang/go#81147).
-    # The lane still runs and still shows red; it just does not block. When
-    # 1.27.2 lands: delete `advisory: true` below and bump go-version.
-    continue-on-error: ${{ matrix.advisory == true }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - { goarch: riscv64, exec: "-exec=qemu-riscv64-static", via: qemu }
-          - { goarch: loong64, exec: "-exec=qemu-loongarch64-static", via: qemu, advisory: true }
+          # loong64 is SET ASIDE until Go 1.27.2 (2026-10-06, issue #70):
+          # go1.27.0/1.27.1 miscompile this package there (golang/go#81000,
+          # see the comment at setup-go below); the fix is backported for
+          # 1.27.2 (golang/go#81147). Put this line back then, with the pin
+          # below raised to 1.27.2:
+          #   - { goarch: loong64, exec: "-exec=qemu-loongarch64-static", via: qemu }
           - { goarch: ppc64le, exec: "-exec=qemu-ppc64le-static", via: qemu }
           - { goarch: s390x,   exec: "-exec=qemu-s390x-static", via: qemu }
           # 32-bit. Every arch above is 64-bit, and a 32-bit int is where a
@@ -158,8 +156,8 @@ jobs:
           # byte for byte as 1.26.4 does, with TRUNCDW still declared `reg:
           # fp11` -- an FP output for an integer result, which is the defect
           # itself. Held at 1.26.4 until 2026-10-05; moved to the new fleet
-          # floor 1.27.1 then, with the loong64 lane made advisory (see the
-          # job's continue-on-error) rather than every lane held back.
+          # floor 1.27.1 then, with the loong64 lane set aside (issue #70)
+          # rather than every lane held back.
           go-version: '1.27.1'
       - run: sudo apt-get update && sudo apt-get install -y qemu-user-static
       - name: Test under qemu (${{ matrix.goarch }})
