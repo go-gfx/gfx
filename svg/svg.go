@@ -43,6 +43,7 @@ import (
 	"encoding/base64"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	_ "image/jpeg" // register JPEG decoder for embedded images
@@ -60,7 +61,27 @@ type Options struct {
 	Scale float64    // device pixels per SVG user-unit (pt). <=0 defaults to 2.0
 	Ink   color.RGBA // colour used for the default black / currentColor fills
 	Paper color.RGBA // page background fill (the document's fill="white" rect). If Paper.A==0, no background is painted (transparent).
+
+	// MaxPixels refuses a surface larger than this, and skips an embedded
+	// <image> larger than this. Zero means [DefaultMaxPixels].
+	//
+	// ⛔ Both numbers it guards come from the DOCUMENT, and an SVG is the kind
+	// of thing people accept from strangers. A service rendering uploads should
+	// set this to what its own pages need rather than inherit the default.
+	MaxPixels int
 }
+
+// DefaultMaxPixels is the surface [Rasterize] will produce when no ceiling is
+// given, and the largest embedded raster it will decode.
+//
+// ⛔ Said in bytes, because a count of pixels does not tell anybody what it
+// permits: a surface is four bytes a pixel, so forty million pixels is a
+// hundred and sixty MILLION BYTES — 152 MiB. That is the same ceiling
+// go-pdfkit/render uses, and it is a little over A4 at 600 dots to the inch.
+//
+// A service rendering documents from strangers should set [Options.MaxPixels]
+// to what its own pages need rather than inherit this.
+const DefaultMaxPixels = 40_000_000
 
 // Group records one <g> element: its attributes (namespace-insensitive local
 // names) and the device-pixel bounding box of everything drawn within it,
@@ -148,6 +169,7 @@ type renderer struct {
 	grads     map[string]gradient   // paint servers, by id
 	clipDefs  map[string]*xnode     // <clipPath> elements, by id
 	clipCache map[clipKey]*clipMask // clips already rasterised
+	maxPixels int                   // the ceiling an embedded <image> may not pass
 }
 
 // gradient is one <linearGradient> or <radialGradient>. Coordinates are kept as
@@ -315,6 +337,22 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 	if w <= 0 || h <= 0 {
 		return nil, errNoSVG
 	}
+	// ⛔ The surface is four bytes a pixel and its size comes from the
+	// DOCUMENT. Measured before this check existed: a hundred-odd bytes of
+	// text declaring width="40000" height="40000" allocated 6.1 GiB and was
+	// rasterised without complaint. Scale multiplies it, and Scale is ours —
+	// but the two numbers it multiplies are not.
+	//
+	// Multiplied in int64: two values a file chose, multiplied in int on a
+	// 32-bit build, is how a ceiling is passed by overflowing past it.
+	max := opt.MaxPixels
+	if max <= 0 {
+		max = DefaultMaxPixels
+	}
+	if px := int64(w) * int64(h); px > int64(max) {
+		return nil, fmt.Errorf("svg: a surface of %dx%d is %d pixels, past the %d allowed",
+			w, h, px, max)
+	}
 
 	ink := opt.Ink
 	if ink == (color.RGBA{}) {
@@ -322,9 +360,10 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 	}
 
 	r := &renderer{
-		img:   raster.New(w, h),
-		ink:   ink,
-		paper: opt.Paper,
+		img:       raster.New(w, h),
+		ink:       ink,
+		paper:     opt.Paper,
+		maxPixels: max,
 	}
 
 	// Opaque background: prefill the whole surface with Paper.
@@ -812,6 +851,19 @@ func (r *renderer) drawImage(n *xnode, st state) {
 	}
 	data, ok := decodeDataURI(href)
 	if !ok {
+		return
+	}
+	// ⛔ The HEADER first. image.Decode allocates the pixel buffer before it
+	// discovers anything is wrong, so a check on what it returns is a check
+	// after the fact: measured, a 246-byte SVG whose <image> claimed
+	// 20000x20000 held 1526.1 MiB and was then drawn into a 100x100 surface.
+	// The picture is base64 in an attribute, so nothing about the document's
+	// size says what it will cost.
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > int64(r.maxPixels) {
 		return
 	}
 	src, _, err := image.Decode(bytes.NewReader(data))

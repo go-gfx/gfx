@@ -28,6 +28,32 @@ rasterization — each usable on its own, with no third-party dependencies.
 - **go-webengine** — HTML/CSS → image, built on `resample`/`codec`/`vector`.
 - **go-widgets/desktop** — icon & thumbnail rendering.
 
+## What an SVG may ask for
+
+An SVG is text, and two of the numbers in it decide allocations: the
+document's own `width`/`height`, and the dimensions an embedded
+`<image href="data:…">` declares in its header. **A surface is four bytes a
+pixel.**
+
+⛔ Measured before `svg.Options.MaxPixels` existed:
+
+| input | before | after |
+| --- | --- | --- |
+| ~110 bytes of text declaring `width="40000" height="40000"` | **6103.5 MiB allocated, rasterised without complaint** | **0.0 MiB**, *"a surface of 40000x40000 is 1600000000 pixels, past the 40000000 allowed"* |
+| a **246-byte** SVG whose `<image>` claims 20000×20000 | **1526.1 MiB held**, then drawn into a 100×100 surface | **0.0 MiB**, skipped |
+
+Both are bounded by `Options.MaxPixels`, whose zero value is
+`svg.DefaultMaxPixels` — forty million pixels, **a hundred and sixty million
+bytes**, the same ceiling `go-pdfkit/render` uses. A service rendering
+documents from strangers should set it to what its own pages need rather than
+inherit that.
+
+The embedded picture is refused from its **header**, through
+`image.DecodeConfig`, before anything is decoded: ⛔ a ceiling enforced after
+the allocation it bounds is not a ceiling, it is a comment. `Scale` counts
+towards it, because the surface is the product and only one of the two numbers
+is ours.
+
 ## Status
 
 Landed: **`geometry`** (float64 point / axis-aligned rect / 2-D affine matrix —
