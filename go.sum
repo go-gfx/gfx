@@ -1,5 +1,5 @@
-github.com/go-images/jpeg2000 v0.13.5 h1:nNKae+WKt9+3n+sEFEtyKPVhepjm5ndAmg3xLfUljNY=
-github.com/go-images/jpeg2000 v0.13.5/go.mod h1:4/Pp3Jp2es5lA8/Ema8F7dFwl0vZprCj9MyznIz9Gdc=
+github.com/go-images/jpeg2000 v0.13.7 h1:zBMsUin25TyQjSRfx07M0HO9GIN9yyKBTMHL2/Ovr7k=
+github.com/go-images/jpeg2000 v0.13.7/go.mod h1:4/Pp3Jp2es5lA8/Ema8F7dFwl0vZprCj9MyznIz9Gdc=
 github.com/go-simd/highway v0.0.14 h1:O3HPG00qgLGlrQyYBlMGyLYsuzZrqHA4+XNptPjV5gs=
 github.com/go-simd/highway v0.0.14/go.mod h1:t5XBPxqa10Lnj0frQS7Ur0JaN+/CckEmm5HXrqBDxXA=
 github.com/sergeymakinen/go-bmp v1.0.0 h1:SdGTzp9WvCV0A1V0mBeaS7kQAwNLdVJbmHlqNWq0R+M=
