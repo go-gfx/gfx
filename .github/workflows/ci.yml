@@ -79,17 +79,38 @@ jobs:
   arch-qemu:
     name: arch ${{ matrix.goarch }} (${{ matrix.via }})
     runs-on: ubuntu-latest
+    # Only the entries that set `advisory` are allowed to fail; every other
+    # lane still gates. Default false, so adding an arch opts IN to gating.
+    continue-on-error: ${{ matrix.advisory == true }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - { goarch: riscv64, exec: "-exec=qemu-riscv64-static", via: qemu }
-          # loong64 is SET ASIDE until Go 1.27.2 (2026-10-06, issue #70):
-          # go1.27.0/1.27.1 miscompile this package there (golang/go#81000,
-          # see the comment at setup-go below); the fix is backported for
-          # 1.27.2 (golang/go#81147). Put this line back then, with the pin
-          # below raised to 1.27.2:
-          #   - { goarch: loong64, exec: "-exec=qemu-loongarch64-static", via: qemu }
+          # ⛔ loong64 IS ADVISORY, AND THE CONDITION IS NOT A VERSION NUMBER.
+          #
+          # This entry was commented out on 2026-10-06 (issue #70) with the
+          # instruction "put it back when Go 1.27.2 ships", because
+          # golang/go#81147 -- the 1.27.x backport of the loong64 miscompile
+          # golang/go#81000 -- carried milestone Go1.27.2 at the time.
+          #
+          # go1.27.2 SHIPPED. Measured 2026-10-12:
+          #
+          #   go1.27.2 published                 yes
+          #   golang/go#81147                    still OPEN
+          #   its milestone                      moved to Go1.27.3
+          #
+          # So following that instruction today would have turned the lane red
+          # again. A release landing is not the signal; the signal is the
+          # BACKPORT closing, and a release published after it.
+          #
+          # The lane therefore comes back ADVISORY rather than waiting for a
+          # version that may slip again: it runs on every push, reports what
+          # the toolchain of the day actually does on this package, and blocks
+          # nothing. That is the watch -- there is no cron to write, because
+          # the lane already answers the question each time the answer can
+          # have changed. When it goes green, drop `advisory` and this comment.
+          - { goarch: loong64, exec: "-exec=qemu-loongarch64-static", via: qemu, advisory: true }
           - { goarch: ppc64le, exec: "-exec=qemu-ppc64le-static", via: qemu }
           - { goarch: s390x,   exec: "-exec=qemu-s390x-static", via: qemu }
           # 32-bit. Every arch above is 64-bit, and a 32-bit int is where a
