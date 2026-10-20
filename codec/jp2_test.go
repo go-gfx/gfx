@@ -112,6 +112,21 @@ func TestHalfACodestreamIsHalfTheQualityRatherThanAnError(t *testing.T) {
 	}
 }
 
+func TestACodestreamThatCrashedTheDecoderIsAnError(t *testing.T) {
+	// It opens SOC then SIZ, so Sniff calls it JPEG 2000 and Decode hands it
+	// to the reference -- and up to go-images/jpeg2000 v0.13.7 its QCD of
+	// length 2 made the reference call make() with -1 and panic, taking down
+	// whatever decoded it. Found by jpeg2000's FuzzDecode and fixed in v0.13.8
+	// (go-images/jpeg2000#36). Bytes as the fuzzer recorded them.
+	crasher := []byte("\xffO\xffQ\x00)00\x00\x0000\x00\x00\x000\x00\x00\x00\x00\x00\x00\x00\x0000000000\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\a0000\x00\f0000000000\xff\\\x00\x00B")
+	if got := Sniff(crasher); got != JP2 {
+		t.Fatalf("sniffed as %s, so this would not reach the decoder at all", got)
+	}
+	if _, err := Decode(crasher); err == nil {
+		t.Error("a codestream with a QCD of length 2 decoded as a picture")
+	}
+}
+
 func TestSomethingThatIsNotACodestreamIsRefused(t *testing.T) {
 	// The SOC/SIZ pair opens it, and nothing follows that is a picture.
 	if _, err := Decode([]byte{0xFF, 0x4F, 0xFF, 0x51, 0x00, 0x01, 0x02}); err == nil {
