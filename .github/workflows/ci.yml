@@ -86,7 +86,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { goarch: riscv64, exec: "-exec=qemu-riscv64-static", via: qemu }
+          - { goarch: riscv64, exec: "-exec=qemu-riscv64", via: qemu }
           # ⛔ loong64 IS ADVISORY, AND THE CONDITION IS NOT A VERSION NUMBER.
           #
           # This entry was commented out on 2026-10-06 (issue #70) with the
@@ -110,9 +110,9 @@ jobs:
           # nothing. That is the watch -- there is no cron to write, because
           # the lane already answers the question each time the answer can
           # have changed. When it goes green, drop `advisory` and this comment.
-          - { goarch: loong64, exec: "-exec=qemu-loongarch64-static", via: qemu, advisory: true }
-          - { goarch: ppc64le, exec: "-exec=qemu-ppc64le-static", via: qemu }
-          - { goarch: s390x,   exec: "-exec=qemu-s390x-static", via: qemu }
+          - { goarch: loong64, exec: "-exec=qemu-loongarch64", via: qemu, advisory: true }
+          - { goarch: ppc64le, exec: "-exec=qemu-ppc64le", via: qemu }
+          - { goarch: s390x,   exec: "-exec=qemu-s390x", via: qemu }
           # 32-bit. Every arch above is 64-bit, and a 32-bit int is where a
           # pixel count that multiplies a width by a height stops fitting.
           # There is no SIMD path for either, so these two are also the only
@@ -133,7 +133,7 @@ jobs:
           # the signal Go delivers for asynchronous preemption. Emulating 386
           # here would buy nothing and cost a lane that goes red at random.
           - { goarch: "386",   exec: "", via: native }
-          - { goarch: arm,     exec: "-exec=qemu-arm-static", via: qemu }
+          - { goarch: arm,     exec: "-exec=qemu-arm", via: qemu }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -180,7 +180,17 @@ jobs:
           # floor 1.27.1 then, with the loong64 lane set aside (issue #70)
           # rather than every lane held back.
           go-version: '1.27.2'
-      - run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+      # ⛔ qemu-user, called qemu-<arch>, NOT qemu-user-static and
+      # qemu-<arch>-static. From 2026-10-19 ubuntu-latest is Ubuntu 26.04,
+      # where qemu-user-static is only a virtual package ("has no installation
+      # candidate", exit 100, every qemu lane red before a test ran), and the
+      # static binaries ship in qemu-user under names WITHOUT the suffix
+      # (Debian's file list: /usr/bin/qemu-riscv64, no -static). Ubuntu 24.04
+      # has a qemu-user package with the same names, so this one spelling
+      # works on both images while the rollout is under way. The native 386
+      # lane needs no emulator and installs none.
+      - if: matrix.via == 'qemu'
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
       - name: Test under qemu (${{ matrix.goarch }})
         run: GOARCH=${{ matrix.goarch }} go test ${{ matrix.exec }} ./...
 
