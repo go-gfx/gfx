@@ -54,10 +54,27 @@ the allocation it bounds is not a ceiling, it is a comment. `Scale` counts
 towards it, because the surface is the product and only one of the two numbers
 is ours.
 
+## What an ICO directory may ask for
+
+A reference decoder stays in `codec` only while what it allocates is bounded
+by the dimensions its header reports (a pixel ceiling can then stop it). The
+`.ico` reference, `sergeymakinen/go-ico`, was not, so ICO is now decoded here,
+DIB representations included:
+
+| input | go-ico | now |
+| --- | --- | --- |
+| 65535 directory entries pointing at **one** 512×512 PNG | decodes and keeps all 65535 (68.7 GB by arithmetic) | decodes the chosen one: under 16 MiB, tested |
+| an entry whose size field says 4 GB, from a reader that cannot seek back | allocates the 4 GB before reading | every entry is a slice of the input; nothing is allocated from a size field |
+| a 32-bit icon whose alpha bytes are all 0 | **fully transparent** (measured) | opaque, AND mask applied (Chromium's rule) |
+| a 32-bit icon with real alpha | alpha, then masked again | alpha, mask skipped |
+
+A DIB must hold every byte its header implies (colour table, colour rows, mask
+rows) before its raster is allocated. A 256×256 32-bit icon decodes in 4
+allocations and 262 KB, against go-ico's 20 and 596 KB. Fuzzed: `FuzzDecodeICO`.
+
 ## What a Netpbm or QOI header may ask for
 
-`codec` parses two formats itself, Netpbm (P1–P6) and QOI; every other format
-goes to a reference decoder. Both of ours now refuse a header that describes
+`codec` parses Netpbm (P1–P6) and QOI itself. Both refuse a header that describes
 more raster than the file holds: a binary Netpbm sample is one or two bytes,
 an ASCII one at least a byte, and one QOI chunk byte stands for at most 62
 pixels. That is a property of the format, not a policy, so no limit is needed.
