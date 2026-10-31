@@ -23,6 +23,13 @@ func decodeQOI(data []byte) (*raster.Image, error) {
 	if w <= 0 || h <= 0 || w > 1<<20 || h > 1<<20 {
 		return nil, fmt.Errorf("codec: bad QOI dimensions %dx%d", w, h)
 	}
+	// ⛔ A chunk byte stands for at most 62 pixels (a RUN byte tops out at 0xFD,
+	// run 61 plus the pixel itself; every other op costs a byte or more per
+	// pixel), so the bytes after the header bound the pixel count. Without this,
+	// a 14-byte header asked raster.New for up to 4 TiB before reading a pixel.
+	if uint64(w)*uint64(h) > 62*uint64(len(data)-14) {
+		return nil, fmt.Errorf("codec: QOI header %dx%d describes more pixels than %d bytes of chunks can hold", w, h, len(data)-14)
+	}
 	img := raster.New(w, h)
 	var index [64]color.RGBA
 	px := color.RGBA{0, 0, 0, 255}
