@@ -338,7 +338,7 @@ func TestICORefusesWhatItsBytesDoNotHold(t *testing.T) {
 	}
 	for name, data := range bad {
 		t.Run(name, func(t *testing.T) {
-			if _, err := decodeICO(data, 0); err == nil {
+			if _, err := decodeICO(data, 0, DefaultMaxPixels); err == nil {
 				t.Fatal("expected an error")
 			}
 		})
@@ -346,7 +346,7 @@ func TestICORefusesWhatItsBytesDoNotHold(t *testing.T) {
 	t.Run("raster past an int", func(t *testing.T) {
 		defer func(v uint64) { icoMaxPixels = v }(icoMaxPixels)
 		icoMaxPixels = 31 // the 8x4 DIB is 32 pixels
-		if _, err := decodeICO(icoFile(good), 0); err == nil {
+		if _, err := decodeICO(icoFile(good), 0, DefaultMaxPixels); err == nil {
 			t.Fatal("expected an error")
 		}
 	})
@@ -357,7 +357,7 @@ func TestICOColourCountZeroMeansAFullTable(t *testing.T) {
 	s := dibSpec{w: 2, h: 1, bpp: 1, palette: grey16[:2], pixel: func(x, y int) uint32 { return uint32(x) }}
 	b := s.encode()
 	binary.LittleEndian.PutUint32(b[32:], 0)
-	got, err := decodeICO(icoFile(b), 0)
+	got, err := decodeICO(icoFile(b), 0, DefaultMaxPixels)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func benchICO(b *testing.B, data []byte, ours bool) {
 	b.SetBytes(int64(len(data)))
 	for b.Loop() {
 		if ours {
-			if _, err := decodeICO(data, 0); err != nil {
+			if _, err := decodeICO(data, 0, DefaultMaxPixels); err != nil {
 				b.Fatal(err)
 			}
 		} else {
@@ -417,7 +417,7 @@ func FuzzDecodeICO(f *testing.F) {
 	f.Add(icoFile(dibSpec{w: 2, h: 2, bpp: 32, pixel: func(x, y int) uint32 { return 0x80FF0000 }}.encode()))
 	f.Add(icoFile(dibSpec{w: 3, h: 1, bpp: 24, topDown: true, pixel: func(x, y int) uint32 { return 0xFF }}.encode()))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		img, err := decodeICO(data, 0)
+		img, err := decodeICO(data, 0, DefaultMaxPixels)
 		if err == nil && (img.W <= 0 || img.H <= 0) {
 			t.Fatalf("no error and an empty %dx%d image", img.W, img.H)
 		}

@@ -87,7 +87,7 @@ func icnsPNGReps(data []byte) ([][]byte, error) {
 // decodeICNS demuxes an .icns container, selects the PNG representation best
 // matching targetSize (via pickIndex over each representation's PNG-declared
 // pixel size), and decodes it with the standard library.
-func decodeICNS(data []byte, targetSize int) (*raster.Image, error) {
+func decodeICNS(data []byte, targetSize int, max int64) (*raster.Image, error) {
 	reps, err := icnsPNGReps(data)
 	if err != nil {
 		return nil, err
@@ -100,8 +100,11 @@ func decodeICNS(data []byte, targetSize int) (*raster.Image, error) {
 		}
 		sizes[i] = dim{cfg.Width, cfg.Height}
 	}
-	chosen := reps[pickIndex(sizes, targetSize)]
-	img, err := png.Decode(bytes.NewReader(chosen))
+	i := pickIndex(sizes, targetSize)
+	if err := checkPixels(sizes[i].w, sizes[i].h, max); err != nil {
+		return nil, err
+	}
+	img, err := png.Decode(bytes.NewReader(reps[i]))
 	if err != nil {
 		return nil, err
 	}
