@@ -12,12 +12,14 @@
 // symmetric: a reference DECODER exists in pure Go for every format below, a
 // reference encoder for five of them. [CanEncode] says which.
 //
-// It reimplements NO decoder. Every format is handed to a battle-tested pure-Go
-// (CGO-free) reference library, and this package only sniffs the format,
-// delegates, and converts the reference's image.Image into a straight-alpha
-// [raster.Image]:
+// Most formats are handed to a pure-Go (CGO-free) reference library, and this
+// package only sniffs the format, delegates, and converts the reference's
+// image.Image into a straight-alpha [raster.Image]. A reference is kept only
+// while what it allocates is bounded by the dimensions its header reports;
+// one that a few bytes can make allocate more is replaced (ICO, 2026-10-31,
+// see ico_decode.go), and Netpbm and QOI were always decoded here:
 //
-//	format  reference decoder                          module
+//	format  decoder                                    module
 //	------  ----------------------------------------   ------------------------------------
 //	PNG     image/png                                  standard library
 //	JPEG    image/jpeg                                 standard library
@@ -25,8 +27,10 @@
 //	WEBP    golang.org/x/image/webp                    golang.org/x/image
 //	TIFF    golang.org/x/image/tiff                    golang.org/x/image
 //	BMP     golang.org/x/image/bmp                     golang.org/x/image
-//	ICO     github.com/sergeymakinen/go-ico            github.com/sergeymakinen/go-ico
+//	ICO     this package (DIB); image/png (PNG entries)  [see ico_decode.go]
 //	ICNS    image/png (per embedded PNG representation)  standard library  [see icns.go]
+//	PNM     this package                               [see pnm.go]
+//	QOI     this package                               [see qoi.go]
 //	JP2     github.com/go-images/jpeg2000              github.com/go-images/jpeg2000
 //	JBIG2   github.com/tannevaled/gobig2 [fork]         github.com/tannevaled/gobig2
 //
@@ -57,7 +61,6 @@ import (
 
 	"github.com/go-gfx/gfx/raster"
 	jpeg2000 "github.com/go-images/jpeg2000"
-	ico "github.com/sergeymakinen/go-ico"
 	"golang.org/x/image/bmp"
 	"golang.org/x/image/tiff"
 	"golang.org/x/image/webp"
@@ -218,23 +221,6 @@ func decodeSingle(dec func(io.Reader) (image.Image, error), data []byte) (*raste
 		return nil, err
 	}
 	return raster.FromImage(img), nil
-}
-
-// decodeICO decodes a Windows .ico container via the reference codec
-// github.com/sergeymakinen/go-ico and returns the representation best matching
-// targetSize. DecodeAll yields every stored icon; the choice is made by
-// pickIndex over their pixel sizes.
-func decodeICO(data []byte, targetSize int) (*raster.Image, error) {
-	imgs, err := ico.DecodeAll(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	sizes := make([]dim, len(imgs))
-	for i, m := range imgs {
-		b := m.Bounds()
-		sizes[i] = dim{b.Dx(), b.Dy()}
-	}
-	return raster.FromImage(imgs[pickIndex(sizes, targetSize)]), nil
 }
 
 // dim is a representation's pixel width and height, used for size selection.
