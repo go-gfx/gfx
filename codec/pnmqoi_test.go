@@ -85,7 +85,7 @@ func TestPNMErrors(t *testing.T) {
 	}
 	for _, tc := range bad {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := decodePNM([]byte(tc.data)); err == nil {
+			if _, err := decodePNM([]byte(tc.data), DefaultMaxPixels); err == nil {
 				t.Errorf("%q: expected an error", tc.data)
 			}
 		})
@@ -168,7 +168,7 @@ func TestQOIErrors(t *testing.T) {
 	}
 	for _, tc := range bad {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := decodeQOI(tc.data); err == nil {
+			if _, err := decodeQOI(tc.data, DefaultMaxPixels); err == nil {
 				t.Errorf("expected an error")
 			}
 		})

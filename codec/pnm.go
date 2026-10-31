@@ -15,7 +15,7 @@ import (
 // The header is "P<n>" followed by whitespace-separated width, height and (except
 // for bitmaps) a maximum sample value; comments run from '#' to end of line and
 // may appear anywhere in the header.
-func decodePNM(data []byte) (*raster.Image, error) {
+func decodePNM(data []byte, max int64) (*raster.Image, error) {
 	if len(data) < 2 || data[0] != 'P' || data[1] < '1' || data[1] > '6' {
 		return nil, fmt.Errorf("codec: not a Netpbm image")
 	}
@@ -47,6 +47,9 @@ func decodePNM(data []byte) (*raster.Image, error) {
 	// and one whose w*h wraps to zero allocated nothing and then panicked.
 	if !pnmFits(kind, w, h, maxval, len(data)-p.pos) {
 		return nil, fmt.Errorf("codec: Netpbm header %dx%d describes more raster than the %d bytes that follow", w, h, len(data)-p.pos)
+	}
+	if err := checkPixels(w, h, max); err != nil {
+		return nil, err
 	}
 	img := raster.New(w, h)
 	scale := func(v int) uint8 {

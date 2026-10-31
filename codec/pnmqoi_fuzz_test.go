@@ -26,7 +26,7 @@ func FuzzDecodePNM(f *testing.F) {
 		f.Add([]byte(s))
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		img, err := decodePNM(data)
+		img, err := decodePNM(data, DefaultMaxPixels)
 		if err == nil && (img.W <= 0 || img.H <= 0) {
 			t.Fatalf("no error and an empty %dx%d image", img.W, img.H)
 		}
@@ -40,7 +40,7 @@ func FuzzDecodeQOI(f *testing.F) {
 	f.Add(append(append(append([]byte{}, hdr...), 0xFF, 1, 2, 3, 4, 0x40|0x15), end...))
 	f.Add([]byte{'q', 'o', 'i', 'f', 0, 0x10, 0, 0, 0, 0x10, 0, 0, 3, 0})
 	f.Fuzz(func(t *testing.T, data []byte) {
-		img, err := decodeQOI(data)
+		img, err := decodeQOI(data, DefaultMaxPixels)
 		if err == nil && (img.W <= 0 || img.H <= 0) {
 			t.Fatalf("no error and an empty %dx%d image", img.W, img.H)
 		}

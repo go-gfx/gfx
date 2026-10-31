@@ -87,11 +87,31 @@ pixels. That is a property of the format, not a policy, so no limit is needed.
 | a **23-byte** P5 header claiming 100000×100000 | **40 GB** asked of the allocator | refused |
 | a P6 header whose width × height wraps to 0 | **panic** (index out of range) | refused |
 
-Both parsers are fuzzed (`FuzzDecodePNM`, `FuzzDecodeQOI`). The reference
-decoders (PNG, TIFF, JPEG 2000 …) still allocate what their header declares,
-and a compressed format can legitimately describe a large image in a few bytes:
-a caller decoding files from strangers should check `image.DecodeConfig`
-first, as `svg` does.
+Both parsers are fuzzed (`FuzzDecodePNM`, `FuzzDecodeQOI`).
+
+## What any image header may ask for
+
+A compressed format describes a large image in a few bytes: a 1×1 PNG whose
+header says 100000×100000 is a 40 GB decode. Since v0.37.0 every format is
+refused **from its header**, before its decoder allocates, above a pixel
+ceiling:
+
+```go
+img, err := codec.DecodeWith(data, codec.Options{MaxPixels: 4_000_000})
+if errors.Is(err, codec.ErrTooLarge) { … }
+```
+
+`Decode` and `DecodeBest` apply `codec.DefaultMaxPixels`, forty million pixels
+(152 MiB of RGBA), the ceiling `svg` and go-pdfkit/render use. ⚠ That is a
+change: a photograph from a 50-megapixel camera now needs
+`Options{MaxPixels: …}`. A service decoding files from strangers should set the
+ceiling to what it actually needs.
+
+The ceiling is a bound because every decoder behind it allocates within the
+size its header reports (audited in their sources; see ico_decode.go). JPEG
+2000 needs one more number: a codestream may declare 16384 components, so
+codec also hands go-images/jpeg2000 (v0.14.0) a sample ceiling of four per
+pixel.
 
 ## Status
 

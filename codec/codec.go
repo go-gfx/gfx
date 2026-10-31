@@ -50,6 +50,7 @@ package codec
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"image"
 	"image/gif"
@@ -173,7 +174,87 @@ func Sniff(data []byte) Format {
 // use [DecodeBest] to target a size. It returns [ErrUnknownFormat] for an
 // unrecognised input and the reference decoder's own error for a corrupt one.
 func Decode(data []byte) (*raster.Image, error) {
-	return DecodeBest(data, 0)
+	return DecodeWith(data, Options{})
+}
+
+// Options tunes [DecodeWith].
+type Options struct {
+	// TargetSize selects among the representations of ICO and ICNS, as in
+	// [DecodeBest]; <= 0 selects the largest.
+	TargetSize int
+
+	// MaxPixels refuses an image larger than this, from its header, before
+	// it is decoded. Zero means [DefaultMaxPixels].
+	//
+	// ⛔ The number it guards comes from the FILE, and a compressed format
+	// describes a large image in a few bytes: a PNG declaring 100000x100000
+	// is about 40 KB of zeros and 40 GB once decoded. A service decoding
+	// files from strangers should set this to what it actually needs.
+	MaxPixels int
+}
+
+// DefaultMaxPixels is the largest image [Decode], [DecodeBest] and
+// [DecodeWith] produce when no ceiling is given: forty million pixels, a
+// hundred and sixty million bytes of RGBA (152 MiB), the ceiling svg and
+// go-pdfkit/render use. A photograph from a 50-megapixel camera is above it
+// and needs Options.MaxPixels.
+const DefaultMaxPixels = 40_000_000
+
+// ErrTooLarge reports an image whose header declares more pixels than the
+// ceiling allows. Nothing has been decoded when it is returned.
+var ErrTooLarge = errors.New("codec: image larger than the pixel ceiling")
+
+// checkPixels refuses w x h above max, multiplied in int64: two numbers a
+// file chose, multiplied in int on a 32-bit build, is how a ceiling is passed
+// by overflowing past it.
+func checkPixels(w, h int, max int64) error {
+	if px := int64(w) * int64(h); px > max {
+		return fmt.Errorf("%w: %dx%d is %d pixels, past the %d allowed", ErrTooLarge, w, h, px, max)
+	}
+	return nil
+}
+
+// DecodeWith is [DecodeBest] with a pixel ceiling, checked from each format's
+// header before its decoder allocates anything.
+func DecodeWith(data []byte, opt Options) (*raster.Image, error) {
+	max := int64(opt.MaxPixels)
+	if max <= 0 {
+		max = DefaultMaxPixels
+	}
+	switch Sniff(data) {
+	case PNG:
+		return decodeSingle(png.Decode, png.DecodeConfig, data, max)
+	case JPEG:
+		return decodeSingle(jpeg.Decode, jpeg.DecodeConfig, data, max)
+	case GIF:
+		return decodeSingle(gif.Decode, gif.DecodeConfig, data, max)
+	case WEBP:
+		return decodeSingle(webp.Decode, webp.DecodeConfig, data, max)
+	case TIFF:
+		return decodeSingle(tiff.Decode, tiff.DecodeConfig, data, max)
+	case BMP:
+		return decodeSingle(bmp.Decode, bmp.DecodeConfig, data, max)
+	case ICO:
+		return decodeICO(data, opt.TargetSize, max)
+	case ICNS:
+		return decodeICNS(data, opt.TargetSize, max)
+	case PNM:
+		return decodePNM(data, max)
+	case QOI:
+		return decodeQOI(data, max)
+	case JP2:
+		// ⛔ A pixel count does not bound a JPEG 2000 decode: 16384
+		// components may each be allocated at full size. The decoder's own
+		// sample ceiling closes that; four samples a pixel is RGBA.
+		j2k := func(r io.Reader) (image.Image, error) {
+			return jpeg2000.DecodeWithOptions(r, jpeg2000.DecodeOptions{MaxSamples: 4 * max})
+		}
+		return decodeSingle(j2k, jpeg2000.DecodeConfig, data, max)
+	case JBIG2:
+		return decodeSingle(gobig2.Decode, gobig2.DecodeConfig, data, max)
+	default:
+		return nil, ErrUnknownFormat
+	}
 }
 
 // DecodeBest is [Decode] with a target pixel size for the multi-representation
@@ -183,39 +264,21 @@ func Decode(data []byte) (*raster.Image, error) {
 // the largest. targetSize is ignored for single-image formats, whose sole image
 // is returned regardless.
 func DecodeBest(data []byte, targetSize int) (*raster.Image, error) {
-	switch Sniff(data) {
-	case PNG:
-		return decodeSingle(png.Decode, data)
-	case JPEG:
-		return decodeSingle(jpeg.Decode, data)
-	case GIF:
-		return decodeSingle(gif.Decode, data)
-	case WEBP:
-		return decodeSingle(webp.Decode, data)
-	case TIFF:
-		return decodeSingle(tiff.Decode, data)
-	case BMP:
-		return decodeSingle(bmp.Decode, data)
-	case ICO:
-		return decodeICO(data, targetSize)
-	case ICNS:
-		return decodeICNS(data, targetSize)
-	case PNM:
-		return decodePNM(data)
-	case QOI:
-		return decodeQOI(data)
-	case JP2:
-		return decodeSingle(jpeg2000.Decode, data)
-	case JBIG2:
-		return decodeSingle(gobig2.Decode, data)
-	default:
-		return nil, ErrUnknownFormat
-	}
+	return DecodeWith(data, Options{TargetSize: targetSize})
 }
 
-// decodeSingle runs a standard image.Image decoder over data and converts the
-// result to a straight-alpha [raster.Image].
-func decodeSingle(dec func(io.Reader) (image.Image, error), data []byte) (*raster.Image, error) {
+// decodeSingle reads the image's size with cfg, refuses it above max, then
+// runs dec and converts the result to a straight-alpha [raster.Image]. Every
+// decoder handed here allocates within the size its DecodeConfig reports (see
+// the audit in ico_decode.go), which is what makes the check a bound.
+func decodeSingle(dec func(io.Reader) (image.Image, error), cfg func(io.Reader) (image.Config, error), data []byte, max int64) (*raster.Image, error) {
+	c, err := cfg(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if err := checkPixels(c.Width, c.Height, max); err != nil {
+		return nil, err
+	}
 	img, err := dec(bytes.NewReader(data))
 	if err != nil {
 		return nil, err

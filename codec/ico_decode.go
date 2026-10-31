@@ -121,8 +121,9 @@ func pngIHDRSize(p []byte) (w, h int, err error) {
 }
 
 // decodeICO decodes a Windows .ico container and returns the representation
-// best matching targetSize (see pickIndex). Only that one is decoded.
-func decodeICO(data []byte, targetSize int) (*raster.Image, error) {
+// best matching targetSize (see pickIndex). Only that one is decoded, and
+// only if it is at most max pixels.
+func decodeICO(data []byte, targetSize int, max int64) (*raster.Image, error) {
 	entries, err := icoEntries(data)
 	if err != nil {
 		return nil, err
@@ -132,6 +133,9 @@ func decodeICO(data []byte, targetSize int) (*raster.Image, error) {
 		sizes[i] = dim{e.w, e.h}
 	}
 	e := entries[pickIndex(sizes, targetSize)]
+	if err := checkPixels(e.w, e.h, max); err != nil {
+		return nil, err
+	}
 	if e.dib != nil {
 		return e.dib.decode(), nil
 	}

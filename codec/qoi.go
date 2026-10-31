@@ -14,7 +14,7 @@ import (
 // decodeQOI decodes the "Quite OK Image" format (https://qoiformat.org): a 14-byte
 // header ("qoif", width, height, channels, colorspace) followed by run/index/diff/
 // luma/rgb/rgba chunks and an 8-byte end marker.
-func decodeQOI(data []byte) (*raster.Image, error) {
+func decodeQOI(data []byte, max int64) (*raster.Image, error) {
 	if len(data) < 14 || string(data[:4]) != "qoif" {
 		return nil, fmt.Errorf("codec: not a QOI image")
 	}
@@ -29,6 +29,9 @@ func decodeQOI(data []byte) (*raster.Image, error) {
 	// a 14-byte header asked raster.New for up to 4 TiB before reading a pixel.
 	if uint64(w)*uint64(h) > 62*uint64(len(data)-14) {
 		return nil, fmt.Errorf("codec: QOI header %dx%d describes more pixels than %d bytes of chunks can hold", w, h, len(data)-14)
+	}
+	if err := checkPixels(w, h, max); err != nil {
+		return nil, err
 	}
 	img := raster.New(w, h)
 	var index [64]color.RGBA
