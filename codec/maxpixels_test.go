@@ -68,18 +68,18 @@ func icnsOf(t *testing.T, p []byte) []byte {
 	return append(out, p...)
 }
 
-// A 1x1 PNG whose IHDR (CRC recomputed) claims 20000x20000: 1.6 GB of RGBA
+// A 1x1 PNG whose IHDR (CRC recomputed) claims 16000x16000: 1 GB of RGBA
 // once decoded. Decode, with the default ceiling, refuses it from the header.
-// (100000x100000 would test image/png instead: on a 32-bit build its own
-// DecodeConfig already refuses that as "dimension overflow".)
+// (Above 2^28 pixels this would test image/png instead: on a 32-bit build
+// its parseIHDR refuses nPixels*8 overflowing an int, "dimension overflow".)
 func TestTheDefaultCeilingRefusesAPNGHeaderBomb(t *testing.T) {
 	var b bytes.Buffer
 	if err := png.Encode(&b, image.NewGray(image.Rect(0, 0, 1, 1))); err != nil {
 		t.Fatal(err)
 	}
 	p := b.Bytes()
-	binary.BigEndian.PutUint32(p[16:], 20000)
-	binary.BigEndian.PutUint32(p[20:], 20000)
+	binary.BigEndian.PutUint32(p[16:], 16000)
+	binary.BigEndian.PutUint32(p[20:], 16000)
 	binary.BigEndian.PutUint32(p[29:], crc32.ChecksumIEEE(p[12:29]))
 	var before, after runtime.MemStats
 	runtime.GC()
