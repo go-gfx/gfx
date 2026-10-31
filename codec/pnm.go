@@ -43,6 +43,11 @@ func decodePNM(data []byte) (*raster.Image, error) {
 	if binary {
 		p.pos++
 	}
+	// ⛔ Checked before raster.New: a 23-byte header otherwise allocated 40 GB,
+	// and one whose w*h wraps to zero allocated nothing and then panicked.
+	if !pnmFits(kind, w, h, maxval, len(data)-p.pos) {
+		return nil, fmt.Errorf("codec: Netpbm header %dx%d describes more raster than the %d bytes that follow", w, h, len(data)-p.pos)
+	}
 	img := raster.New(w, h)
 	scale := func(v int) uint8 {
 		if maxval == 255 {
@@ -77,32 +82,43 @@ func decodePNM(data []byte) (*raster.Image, error) {
 				}
 				r, g, b = scale(rr), scale(gg), scale(bb)
 			case 4: // binary bitmap: MSB-first, 1 = black, rows byte-aligned
-				bit, err := p.bit(x, y, w)
-				if err != nil {
-					return nil, err
-				}
-				if bit == 0 {
+				if p.bit(x, y, w) == 0 {
 					r, g, b = 255, 255, 255
 				}
 			case 5: // binary graymap
-				v, err := p.sample(maxval)
-				if err != nil {
-					return nil, err
-				}
+				v := p.sample(maxval)
 				r, g, b = scale(v), scale(v), scale(v)
 			case 6: // binary pixmap
-				rr, e1 := p.sample(maxval)
-				gg, e2 := p.sample(maxval)
-				bb, e3 := p.sample(maxval)
-				if e1 != nil || e2 != nil || e3 != nil {
-					return nil, fmt.Errorf("codec: truncated Netpbm pixmap")
-				}
+				rr, gg, bb := p.sample(maxval), p.sample(maxval), p.sample(maxval)
 				r, g, b = scale(rr), scale(gg), scale(bb)
 			}
 			img.Set(x, y, color.RGBA{r, g, b, 255})
 		}
 	}
 	return img, nil
+}
+
+// pnmFits reports whether avail bytes can hold a w x h raster of the given
+// kind: every sample costs at least one byte (two for a 16-bit binary sample),
+// a binary bitmap row ceil(w/8) bytes. It divides rather than multiplies,
+// because w and h come from the file and their product can wrap.
+func pnmFits(kind byte, w, h, maxval, avail int) bool {
+	// A zero or negative avail needs no case of its own: w > avail and the
+	// bitmap division below both reject it, since w and h are positive.
+	if kind == 4 {
+		return h <= avail/((w+7)/8) // w > 0, so the row is at least a byte
+	}
+	if w > avail {
+		return false
+	}
+	row := w // P1, P2, P5: one sample per pixel
+	if kind == 3 || kind == 6 {
+		row = 3 * w // cannot overflow: w <= avail <= len(data)
+	}
+	if (kind == 5 || kind == 6) && maxval > 255 {
+		row *= 2
+	}
+	return h <= avail/row
 }
 
 // pnmParser walks a Netpbm byte stream.
@@ -161,30 +177,22 @@ func (p *pnmParser) asciiInt() (int, error) {
 	return n, nil
 }
 
-// sample reads one binary sample (1 byte for maxval<256, else 2 bytes big-endian).
-func (p *pnmParser) sample(maxval int) (int, error) {
+// sample reads one binary sample (1 byte for maxval<256, else 2 bytes
+// big-endian). It cannot run past the data: pnmFits proved the whole raster
+// is there before the first sample was read.
+func (p *pnmParser) sample(maxval int) int {
 	if maxval < 256 {
-		if p.pos >= len(p.data) {
-			return 0, fmt.Errorf("codec: truncated Netpbm raster")
-		}
 		v := int(p.data[p.pos])
 		p.pos++
-		return v, nil
-	}
-	if p.pos+1 >= len(p.data) {
-		return 0, fmt.Errorf("codec: truncated Netpbm raster")
+		return v
 	}
 	v := int(p.data[p.pos])<<8 | int(p.data[p.pos+1])
 	p.pos += 2
-	return v, nil
+	return v
 }
 
-// bit reads the (x,y) pixel of a binary bitmap; rows are padded to whole bytes.
-func (p *pnmParser) bit(x, y, w int) (int, error) {
-	rowBytes := (w + 7) / 8
-	idx := p.pos + y*rowBytes + x/8
-	if idx >= len(p.data) {
-		return 0, fmt.Errorf("codec: truncated Netpbm bitmap")
-	}
-	return int(p.data[idx]>>(7-uint(x%8))) & 1, nil
+// bit reads the (x,y) pixel of a binary bitmap; rows are padded to whole
+// bytes, all of them present (pnmFits).
+func (p *pnmParser) bit(x, y, w int) int {
+	return int(p.data[p.pos+y*((w+7)/8)+x/8]>>(7-uint(x%8))) & 1
 }

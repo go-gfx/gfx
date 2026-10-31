@@ -17,7 +17,7 @@ rasterization — each usable on its own, with no third-party dependencies.
 | `color`    | full colour science: HSV/HSL/HWB, XYZ/Lab/LCh/Luv/OKLab/OKLCH, Y′CbCr, CMYK, D65↔D50 Bradford, ΔE (76/94/2000/OK), separable + non-separable blends, premultiplied alpha |
 | `raster`   | shared pixel-buffer / pixel-format substrate |
 | `resample` | high-quality resizing: box/area, bicubic (Catmull-Rom), Lanczos |
-| `codec`    | image decoders/encoders: png, jpeg, webp, ico, icns, gif, tiff |
+| `codec`    | image decoders/encoders: png, jpeg, gif, webp, tiff, bmp, ico, icns, jpeg 2000, jbig2, netpbm, qoi |
 | `vector`   | paths, anti-aliased fill/stroke rasterizer (round joins & caps, non-zero / even-odd), linear/radial gradients, source-over compositing |
 | `iso`      | isometric projection (project / unproject / depth-sort) and shaded pixel primitives — cube, brick, pyramid, slope, line, side — composited into a depth-ordered scene (the pure-Go obelisk.js) |
 
@@ -53,6 +53,28 @@ The embedded picture is refused from its **header**, through
 the allocation it bounds is not a ceiling, it is a comment. `Scale` counts
 towards it, because the surface is the product and only one of the two numbers
 is ours.
+
+## What a Netpbm or QOI header may ask for
+
+`codec` parses two formats itself, Netpbm (P1–P6) and QOI; every other format
+goes to a reference decoder. Both of ours now refuse a header that describes
+more raster than the file holds: a binary Netpbm sample is one or two bytes,
+an ASCII one at least a byte, and one QOI chunk byte stands for at most 62
+pixels. That is a property of the format, not a policy, so no limit is needed.
+
+⛔ Measured before the check:
+
+| input | before | after |
+| --- | --- | --- |
+| a **14-byte** QOI header claiming 2²⁰×2²⁰ | **4.4 TB** asked of the allocator | refused, nothing allocated |
+| a **23-byte** P5 header claiming 100000×100000 | **40 GB** asked of the allocator | refused |
+| a P6 header whose width × height wraps to 0 | **panic** (index out of range) | refused |
+
+Both parsers are fuzzed (`FuzzDecodePNM`, `FuzzDecodeQOI`). The reference
+decoders (PNG, TIFF, JPEG 2000 …) still allocate what their header declares,
+and a compressed format can legitimately describe a large image in a few bytes:
+a caller decoding files from strangers should check `image.DecodeConfig`
+first, as `svg` does.
 
 ## Status
 
