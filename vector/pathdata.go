@@ -275,7 +275,6 @@ func up(c byte) byte {
 // form writes Xx: a, Yx: c, X0: e, Xy: b, Yy: d, Y0: f and the field names
 // refuse the transposition that a [6]float64 would have accepted silently.
 //
-//
 // ok is false when the data names a command this does not know, begins a
 // drawing command with no preceding move, or is otherwise malformed — so a
 // caller can skip ONE shape rather than fail the page. It is also false when
