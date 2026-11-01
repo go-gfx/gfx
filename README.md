@@ -18,7 +18,7 @@ rasterization — each usable on its own, with no third-party dependencies.
 | `raster`   | shared pixel-buffer / pixel-format substrate |
 | `resample` | high-quality resizing: box/area, bicubic (Catmull-Rom), Lanczos |
 | `codec`    | image decoders/encoders: png, jpeg, gif, webp, tiff, bmp, ico, icns, jpeg 2000, jbig2, netpbm, qoi |
-| `vector`   | paths, anti-aliased fill/stroke rasterizer (round joins & caps, non-zero / even-odd), linear/radial gradients, source-over compositing |
+| `vector`   | paths, a **path-data parser** shared by SVG/ODF/OpenXPS, anti-aliased fill/stroke rasterizer (round joins & caps, non-zero / even-odd), linear/radial gradients, source-over compositing |
 | `iso`      | isometric projection (project / unproject / depth-sort) and shaded pixel primitives — cube, brick, pyramid, slope, line, side — composited into a depth-ordered scene (the pure-Go obelisk.js) |
 
 ## Consumers
@@ -53,6 +53,54 @@ The embedded picture is refused from its **header**, through
 the allocation it bounds is not a ceiling, it is a comment. `Scale` counts
 towards it, because the surface is the product and only one of the two numbers
 is ours.
+
+## One path-data parser, three formats
+
+`vector.ParseData` reads the syntax of SVG's `d` attribute and returns the
+outline, with a `geometry.Matrix` applied on the way. It lives in `vector`
+rather than in `svg` because **three formats write the same syntax**, and the
+arc maths and the smooth-curve reflection are worth transcribing once:
+
+| | SVG `d` | ODF `draw:path` | OpenXPS *abbreviated geometry* |
+|---|---|---|---|
+| commands | `M L H V C S Q T A Z` | the same (`svg:d`) | the same, **minus `T`** |
+| arc operands | `rx ry rot large sweep x y` | the same | the same order |
+| sweep sense | positive-angle | the same | `FLAG2 == 1 ? Clockwise` — the same |
+| fill rule | on the shape | on the shape | an `F0`/`F1` **prefix** on the data |
+
+The sources are SVG 1.1 §8.3 and **ECMA-388 Annex C**, which gives the XPS
+syntax as an algorithm. The `F0`/`F1` prefix is deliberately *not* handled
+here: the fill rule belongs to the shape, not to the outline, so an XPS reader
+strips it and chooses `EvenOdd` or `NonZero` itself.
+
+⛔ **The six numbers are not a row-major matrix.** SVG's `matrix()`, XPS's
+`RenderTransform`, ODF's `draw:transform` and PDF's `cm` all write an affine as
+`[a b c d e f]`, mapping `(x, y)` to `(a*x + c*y + e, b*x + d*y + f)`. Reading
+them row-major swaps `b` with `c`, which leaves **every unrotated drawing
+correct and every rotated one mirrored**.
+
+`ParseData` therefore takes a `geometry.Matrix`, whose entries are named
+(`Xx, Yx, X0 / Xy, Yy, Y0`) rather than positional, so the transposition is not
+expressible. A caller converting from the flat form writes `Xx: a, Yx: c,
+X0: e, Xy: b, Yy: d, Y0: f`, where `b` and `c` are not even adjacent.
+
+That is not hypothetical. Planting exactly that swap:
+
+| | verdict |
+| --- | --- |
+| the whole of `svg`'s suite | **green** — every drawing in it is axis-aligned, so `b == c == 0` |
+| a differential run against the parser as it stood before the move | **57 518 points differ** |
+
+So the move was proved against a control rather than against the suite: the old
+parser and the new one over 20 030 inputs × 6 matrices including a rotation, a
+shear and a mirror, compared with `math.Float64bits` — exact, because the move
+was meant to reorder no arithmetic. **115 518 agreed, 4 662 both refused, 0
+differed.** `TestAShearedTransformTellsBFromC` now keeps that witness in the
+repository, with `b = 0.25` and `c = 0.75`.
+
+`ok` is false both when the data cannot be read and when it **draws nothing** —
+a lone move, or a move and a close. Returning an empty path would let a caller
+paint nothing while believing it had painted something.
 
 ## What an ICO directory may ask for
 
