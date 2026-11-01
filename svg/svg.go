@@ -162,6 +162,7 @@ type state struct {
 
 // renderer holds the target surface and per-page options.
 type renderer struct {
+	root      xnode
 	img       *raster.Image
 	ink       color.RGBA
 	paper     color.RGBA
@@ -170,6 +171,12 @@ type renderer struct {
 	clipDefs  map[string]*xnode     // <clipPath> elements, by id
 	clipCache map[clipKey]*clipMask // clips already rasterised
 	maxPixels int                   // the ceiling an embedded <image> may not pass
+
+	// sink, when set, takes the shapes instead of the surface: the walk is
+	// [Walk] rather than [Rasterize] and img is nil. unsupported collects the
+	// features that walk met and could not hand over.
+	sink        Sink
+	unsupported map[string]bool
 }
 
 // gradient is one <linearGradient> or <radialGradient>. Coordinates are kept as
@@ -314,12 +321,42 @@ func (r *renderer) paintFor(st state, ref string, flat color.RGBA, ox, oy, w, h 
 // Rasterize parses ONE SVG document and renders it to a Result. It returns an
 // error only for a document with no parseable <svg> root.
 func Rasterize(doc string, opt Options) (*Result, error) {
+	r, st, w, h, err := prepare(doc, opt)
+	if err != nil {
+		return nil, err
+	}
+	r.img = raster.New(w, h)
+
+	// Opaque background: prefill the whole surface with Paper.
+	if opt.Paper.A > 0 {
+		for i := 0; i+3 < len(r.img.Pix); i += 4 {
+			r.img.Pix[i] = opt.Paper.R
+			r.img.Pix[i+1] = opt.Paper.G
+			r.img.Pix[i+2] = opt.Paper.B
+			r.img.Pix[i+3] = opt.Paper.A
+		}
+	}
+
+	for i := range r.root.Children {
+		r.render(&r.root.Children[i], st)
+	}
+	return &Result{Image: r.img, Groups: r.groups}, nil
+}
+
+// prepare does everything [Rasterize] and [Walk] share: parse the document,
+// work out the viewport, check the pixel ceiling, collect the paint servers
+// and build the initial state.
+//
+// ⛔ It exists so the two endings cannot drift apart. A shape's geometry,
+// inheritance and transform must be the same whether it is being drawn or
+// handed to a sink — two copies of this would be two documents.
+func prepare(doc string, opt Options) (*renderer, state, int, int, error) {
 	var root xnode
 	if err := xml.Unmarshal([]byte(doc), &root); err != nil {
-		return nil, errNoSVG
+		return nil, state{}, 0, 0, errNoSVG
 	}
 	if root.XMLName.Local != "svg" {
-		return nil, errNoSVG
+		return nil, state{}, 0, 0, errNoSVG
 	}
 
 	scale := opt.Scale
@@ -329,13 +366,13 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 
 	vbMinX, vbMinY, vbW, vbH, ok := rootViewport(&root)
 	if !ok {
-		return nil, errNoSVG
+		return nil, state{}, 0, 0, errNoSVG
 	}
 
 	w := int(math.Round(vbW * scale))
 	h := int(math.Round(vbH * scale))
 	if w <= 0 || h <= 0 {
-		return nil, errNoSVG
+		return nil, state{}, 0, 0, errNoSVG
 	}
 	// ⛔ The surface is four bytes a pixel and its size comes from the
 	// DOCUMENT. Measured before this check existed: a hundred-odd bytes of
@@ -350,7 +387,7 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 		max = DefaultMaxPixels
 	}
 	if px := int64(w) * int64(h); px > int64(max) {
-		return nil, fmt.Errorf("svg: a surface of %dx%d is %d pixels, past the %d allowed",
+		return nil, state{}, 0, 0, fmt.Errorf("svg: a surface of %dx%d is %d pixels, past the %d allowed",
 			w, h, px, max)
 	}
 
@@ -360,24 +397,14 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 	}
 
 	r := &renderer{
-		img:       raster.New(w, h),
+		root:      root,
 		ink:       ink,
 		paper:     opt.Paper,
 		maxPixels: max,
 	}
 
-	// Opaque background: prefill the whole surface with Paper.
-	if opt.Paper.A > 0 {
-		for i := 0; i+3 < len(r.img.Pix); i += 4 {
-			r.img.Pix[i] = opt.Paper.R
-			r.img.Pix[i+1] = opt.Paper.G
-			r.img.Pix[i+2] = opt.Paper.B
-			r.img.Pix[i+3] = opt.Paper.A
-		}
-	}
-
 	r.grads = map[string]gradient{}
-	r.collectDefs(&root)
+	r.collectDefs(&r.root)
 
 	st := state{
 		// Scale to device pixels AND translate the viewBox minimum to the origin,
@@ -403,15 +430,8 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 	}
 	// The root <svg> carries presentation attributes like any other element, and
 	// they are inherited by everything inside it.
-	st = r.applyPaintAttrs(&root, st)
-	for i := range root.Children {
-		r.render(&root.Children[i], st)
-	}
-
-	return &Result{
-		Image:  r.img,
-		Groups: r.groups,
-	}, nil
+	st = r.applyPaintAttrs(&r.root, st)
+	return r, st, w, h, nil
 }
 
 // rootViewport determines the SVG user-space origin (minX, minY) and dimensions
@@ -533,7 +553,14 @@ func (r *renderer) render(n *xnode, parent state) {
 	st = r.applyPaintAttrs(n, st)
 	if v, ok := n.attr("clip-path"); ok {
 		if id, ok := parsePaintRef(v); ok {
-			if c := r.clipFor(id, st); c != nil {
+			// ⛔ A clip is a rasterised MASK here, not a path, so a walk cannot
+			// hand it over — and clipFor would allocate a surface the walk does
+			// not have. It is reported instead, and clipFor is never called.
+			if r.sink != nil {
+				if _, ok := r.clipDefs[id]; ok {
+					r.note("clip-path")
+				}
+			} else if c := r.clipFor(id, st); c != nil {
 				// Clips nest by intersection, so a clip on a group and a clip
 				// on the shape inside it both apply. A fresh slice keeps
 				// siblings from aliasing one another's backing array.
@@ -568,7 +595,13 @@ func (r *renderer) render(n *xnode, parent state) {
 			}
 		}
 	case "image":
-		r.drawImage(n, st)
+		// An embedded raster is not a shape; a vector consumer has to be told
+		// it was there rather than left with a document missing a picture.
+		if r.sink != nil {
+			r.note("image")
+		} else {
+			r.drawImage(n, st)
+		}
 	case "svg":
 		// A nested <svg> island: apply x/y offset and viewBox scaling, then
 		// descend into its children as a group.
@@ -640,6 +673,11 @@ func scaleCov(cov []float64, k float64) []float64 {
 }
 
 func (r *renderer) fillPath(p *vector.Path, st state) {
+	// A walk takes the outline itself; only a rasterising run needs pixels.
+	if r.sink != nil {
+		r.emit(p, st)
+		return
+	}
 	var rz vector.Rasterizer
 	if st.paint && st.fillOp > 0 {
 		if cov, ox, oy, w, h, ok := rz.Fill(p, st.fillRule, r.img.W, r.img.H); ok {
