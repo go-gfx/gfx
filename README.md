@@ -57,9 +57,9 @@ is ours.
 ## One path-data parser, three formats
 
 `vector.ParseData` reads the syntax of SVG's `d` attribute and returns the
-outline, with an `Affine` applied on the way. It lives in `vector` rather than
-in `svg` because **three formats write the same syntax**, and the arc maths and
-the smooth-curve reflection are worth transcribing once:
+outline, with a `geometry.Matrix` applied on the way. It lives in `vector`
+rather than in `svg` because **three formats write the same syntax**, and the
+arc maths and the smooth-curve reflection are worth transcribing once:
 
 | | SVG `d` | ODF `draw:path` | OpenXPS *abbreviated geometry* |
 |---|---|---|---|
@@ -73,11 +73,16 @@ syntax as an algorithm. The `F0`/`F1` prefix is deliberately *not* handled
 here: the fill rule belongs to the shape, not to the outline, so an XPS reader
 strips it and chooses `EvenOdd` or `NonZero` itself.
 
-⛔ **The six numbers are not a row-major matrix.** `Affine` is `[a b c d e f]`
-mapping `(x, y)` to `(a*x + c*y + e, b*x + d*y + f)` — the order SVG's
-`matrix()`, XPS's `RenderTransform`, ODF's `draw:transform` and PDF's `cm` all
-use. Reading them row-major swaps `b` with `c`, which leaves **every unrotated
-drawing correct and every rotated one mirrored**.
+⛔ **The six numbers are not a row-major matrix.** SVG's `matrix()`, XPS's
+`RenderTransform`, ODF's `draw:transform` and PDF's `cm` all write an affine as
+`[a b c d e f]`, mapping `(x, y)` to `(a*x + c*y + e, b*x + d*y + f)`. Reading
+them row-major swaps `b` with `c`, which leaves **every unrotated drawing
+correct and every rotated one mirrored**.
+
+`ParseData` therefore takes a `geometry.Matrix`, whose entries are named
+(`Xx, Yx, X0 / Xy, Yy, Y0`) rather than positional, so the transposition is not
+expressible. A caller converting from the flat form writes `Xx: a, Yx: c,
+X0: e, Xy: b, Yy: d, Y0: f`, where `b` and `c` are not even adjacent.
 
 That is not hypothetical. Planting exactly that swap:
 
