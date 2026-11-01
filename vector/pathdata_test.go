@@ -9,6 +9,8 @@ package vector
 import (
 	"math"
 	"testing"
+
+	"github.com/go-gfx/gfx/geometry"
 )
 
 // steps flattens a Path into something a test can assert on.
@@ -39,14 +41,16 @@ func close2(a, b [2]float64) bool {
 // separates the two readings of [a b c d e f], and without one this package
 // would ship a parser that mirrors every rotated drawing it is given.
 //
-// The expected points are worked out from the definition in Affine's own doc
-// comment -- (a*x + c*y + e, b*x + d*y + f) -- and not from running the code,
-// so the test can disagree with the implementation.
+// The expected points are worked out from geometry.Matrix's own doc comment --
+// x' = Xx*x + Yx*y + X0, y' = Xy*x + Yy*y + Y0 -- and not from running the
+// code, so the test can disagree with the implementation.
 func TestAShearedTransformTellsBFromC(t *testing.T) {
 	t.Parallel()
 
-	// b = 0.25 and c = 0.75: different, so the two readings diverge.
-	m := Affine{1, 0.25, 0.75, 1, 0, 0}
+	// In the flat [a b c d e f] that SVG, XPS, ODF and PDF all write, this is
+	// b = 0.25 and c = 0.75: DIFFERENT, so the two readings diverge. Here they
+	// are Xy and Yx, which cannot be confused for one another.
+	m := geometry.Matrix{Xx: 1, Yx: 0.75, X0: 0, Xy: 0.25, Yy: 1, Y0: 0}
 	p, ok := ParseData("M0 0L4 0L0 4", m)
 	if !ok {
 		t.Fatal("the data was refused")
@@ -71,7 +75,7 @@ func TestAShearedTransformTellsBFromC(t *testing.T) {
 func TestIdentityChangesNothing(t *testing.T) {
 	t.Parallel()
 
-	p, ok := ParseData("M1 2L3 4", Identity())
+	p, ok := ParseData("M1 2L3 4", geometry.Identity())
 	if !ok {
 		t.Fatal("refused")
 	}
@@ -109,7 +113,7 @@ func TestTheCommandsOpenXPSAlsoWrites(t *testing.T) {
 		{"close", "M0 0L10 0Z", 3},
 		{"two subpaths", "M0 0L1 1M5 5L6 6", 4},
 	} {
-		p, ok := ParseData(tc.data, Identity())
+		p, ok := ParseData(tc.data, geometry.Identity())
 		if !ok {
 			t.Errorf("%s: %q was refused", tc.why, tc.data)
 			continue
@@ -136,7 +140,7 @@ func TestDataThatDrawsNothingIsRefused(t *testing.T) {
 		{"truncated", "M0 0L"},
 		{"an arc flag that is neither 0 nor 1", "M0 0A5 5 0 2 1 10 10"},
 	} {
-		if _, ok := ParseData(tc.data, Identity()); ok {
+		if _, ok := ParseData(tc.data, geometry.Identity()); ok {
 			t.Errorf("%s: %q was accepted", tc.why, tc.data)
 		}
 	}
@@ -148,7 +152,7 @@ func TestDataThatDrawsNothingIsRefused(t *testing.T) {
 func TestTheCompactNumberFormsSVGAllows(t *testing.T) {
 	t.Parallel()
 
-	p, ok := ParseData("M0 0L1.4.1", Identity())
+	p, ok := ParseData("M0 0L1.4.1", geometry.Identity())
 	if !ok {
 		t.Fatal(`"1.4.1" was refused; it is two numbers, 1.4 and .1`)
 	}
@@ -156,7 +160,7 @@ func TestTheCompactNumberFormsSVGAllows(t *testing.T) {
 		t.Errorf("got %v, want [1.4 0.1]", got)
 	}
 
-	p, ok = ParseData("M0 0L+1-2", Identity())
+	p, ok = ParseData("M0 0L+1-2", geometry.Identity())
 	if !ok {
 		t.Fatal(`"+1-2" was refused; a sign separates numbers`)
 	}
@@ -175,7 +179,7 @@ func TestADegenerateArcIsSkippedNotRefused(t *testing.T) {
 		"M0 0L1 1A0 5 0 0 1 10 10",
 		"M0 0L1 1A5 5 0 0 1 1 1",
 	} {
-		if _, ok := ParseData(data, Identity()); !ok {
+		if _, ok := ParseData(data, geometry.Identity()); !ok {
 			t.Errorf("%q was refused; a degenerate arc is skipped, not fatal", data)
 		}
 	}
