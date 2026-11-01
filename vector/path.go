@@ -108,6 +108,58 @@ func (p *Path) Close() *Path {
 	return p
 }
 
+// A PathOp is one command of a [Path], as [Path.Each] reports it.
+type PathOp uint8
+
+// The commands a Path records. They are exactly the builder methods, so a
+// path read back and rebuilt command by command is the path that was read.
+const (
+	// OpMove starts a new sub-path at the point.
+	OpMove PathOp = iota
+	// OpLine draws a straight segment to the point.
+	OpLine
+	// OpQuad draws a quadratic bezier through one control to the point.
+	OpQuad
+	// OpCubic draws a cubic bezier through two controls to the point.
+	OpCubic
+	// OpClose closes the current sub-path. It carries no points.
+	OpClose
+)
+
+// Each calls fn for every command of the path, in the order they were added.
+//
+// The points are the command's own, in the order the matching builder method
+// takes them: nothing for [OpClose], the target for [OpMove] and [OpLine],
+// control-then-target for [OpQuad], and both controls then the target for
+// [OpCubic].
+//
+// ⛔ THIS EXISTS BECAUSE A PATH THAT CANNOT BE READ BACK CANNOT BE EXPORTED.
+// A Path is built to be rasterised, and for that nothing needs to read it —
+// the rasteriser owns the only consumer and reaches the fields directly. But a
+// consumer that writes a VECTOR format (PDF, SVG, PostScript) needs the curves
+// themselves, and flattening to line segments, which is what [Path.flatten]
+// does for the scan converter, throws away exactly what makes those formats
+// worth writing to.
+func (p *Path) Each(fn func(op PathOp, pts ...[2]float64)) {
+	for _, s := range p.segs {
+		switch s.op {
+		case opMove:
+			fn(OpMove, [2]float64{s.x, s.y})
+		case opLine:
+			fn(OpLine, [2]float64{s.x, s.y})
+		case opQuad:
+			fn(OpQuad, [2]float64{s.cx1, s.cy1}, [2]float64{s.x, s.y})
+		case opCubic:
+			fn(OpCubic, [2]float64{s.cx1, s.cy1}, [2]float64{s.cx2, s.cy2}, [2]float64{s.x, s.y})
+		default:
+			fn(OpClose)
+		}
+	}
+}
+
+// Len is how many commands the path records.
+func (p *Path) Len() int { return len(p.segs) }
+
 // flattenTol is the maximum distance, in pixel units, a flattened line segment
 // may deviate from the true curve. Smaller = smoother + more segments.
 const flattenTol = 0.2
