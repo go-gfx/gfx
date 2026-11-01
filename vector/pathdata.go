@@ -9,27 +9,9 @@ package vector
 import (
 	"math"
 	"strconv"
+
+	"github.com/go-gfx/gfx/geometry"
 )
-
-// Affine is a 2x3 transform written [a b c d e f], mapping a point (x, y) to
-// (a*x + c*y + e, b*x + d*y + f).
-//
-// ⛔ THE ORDER IS THE TRAP, not the arithmetic. SVG's transform="matrix(...)",
-// XPS's RenderTransform, ODF's draw:transform and PDF's `cm` operator all write
-// an affine as these same six numbers in this same order, which is why one type
-// serves all of them -- but the six are NOT a row-major 2x3 matrix, and reading
-// them as one silently swaps b with c. That mistake leaves every unrotated
-// drawing correct and every rotated one mirrored, so it survives a test suite
-// built from rectangles.
-type Affine [6]float64
-
-// Identity is the transform that changes nothing.
-func Identity() Affine { return Affine{1, 0, 0, 1, 0, 0} }
-
-// Apply maps a point through the transform.
-func (m Affine) Apply(x, y float64) (float64, float64) {
-	return m[0]*x + m[2]*y + m[4], m[1]*x + m[3]*y + m[5]
-}
 
 // pathScanner tokenises a path "d" string into command letters and numbers.
 type pathScanner struct {
@@ -280,15 +262,36 @@ func up(c byte) byte {
 // Being liberal about an input nobody can write by accident is cheaper than a
 // mode flag, and a converter's job is to read what it is given.
 //
+// # The transform is geometry.Matrix, and that is not an accident
+//
+// ⛔ SVG's transform="matrix(...)", XPS's RenderTransform, ODF's draw:transform
+// and PDF's `cm` all write an affine as six numbers [a b c d e f] -- which are
+// NOT a row-major 2x3 matrix. Reading them as one swaps b with c, and that
+// mistake leaves every UNROTATED drawing correct and every rotated one
+// mirrored, so it survives a test suite built from rectangles. (It did: the
+// whole of gfx/svg's suite stayed green on exactly that mutant.)
+//
+// geometry.Matrix names its six entries, so a caller converting from the flat
+// form writes Xx: a, Yx: c, X0: e, Xy: b, Yy: d, Y0: f and the field names
+// refuse the transposition that a [6]float64 would have accepted silently.
+//
+//
 // ok is false when the data names a command this does not know, begins a
 // drawing command with no preceding move, or is otherwise malformed — so a
 // caller can skip ONE shape rather than fail the page. It is also false when
 // the data draws nothing at all: a lone move, or a move and a close, has no
 // interior and no outline, and returning an empty Path would make a caller
 // paint nothing while believing it painted something.
-func ParseData(d string, m Affine) (*Path, bool) {
+func ParseData(d string, m geometry.Matrix) (*Path, bool) {
 	sc := &pathScanner{s: d}
 	path := NewPath()
+
+	// apply is TransformPoint in this package's own (x, y) vocabulary, so the
+	// builders below read as they did when the transform was applied here.
+	apply := func(x, y float64) (float64, float64) {
+		p := m.TransformPoint(geometry.Pt(x, y))
+		return p.X, p.Y
+	}
 
 	var (
 		curX, curY     float64 // current point, user space
@@ -301,24 +304,24 @@ func ParseData(d string, m Affine) (*Path, bool) {
 	)
 
 	moveTo := func(x, y float64) {
-		dx, dy := m.Apply(x, y)
+		dx, dy := apply(x, y)
 		path.MoveTo(dx, dy)
 	}
 	lineTo := func(x, y float64) {
-		dx, dy := m.Apply(x, y)
+		dx, dy := apply(x, y)
 		path.LineTo(dx, dy)
 		emitted = true
 	}
 	quadTo := func(cx, cy, x, y float64) {
-		dcx, dcy := m.Apply(cx, cy)
-		dx, dy := m.Apply(x, y)
+		dcx, dcy := apply(cx, cy)
+		dx, dy := apply(x, y)
 		path.QuadTo(dcx, dcy, dx, dy)
 		emitted = true
 	}
 	cubicTo := func(c1x, c1y, c2x, c2y, x, y float64) {
-		d1x, d1y := m.Apply(c1x, c1y)
-		d2x, d2y := m.Apply(c2x, c2y)
-		dx, dy := m.Apply(x, y)
+		d1x, d1y := apply(c1x, c1y)
+		d2x, d2y := apply(c2x, c2y)
+		dx, dy := apply(x, y)
 		path.CubicTo(d1x, d1y, d2x, d2y, dx, dy)
 		emitted = true
 	}

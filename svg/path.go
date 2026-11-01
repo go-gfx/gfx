@@ -7,6 +7,7 @@
 package svg
 
 import (
+	"github.com/go-gfx/gfx/geometry"
 	"github.com/go-gfx/gfx/vector"
 )
 
@@ -21,6 +22,15 @@ import (
 // smooth-curve reflection a second and a third time. Nothing about SVG was left
 // behind: this function is the whole of what was SVG-specific, and that is the
 // conversion of the reader's own matrix type.
+// ⛔ b AND c ARE NOT ADJACENT HERE, and that is the point. This reader's
+// matrix maps (x, y) to (a*x + c*y + e, b*x + d*y + f), so c is the Y
+// coefficient of the X output and b is the X coefficient of the Y output.
+// Written as a flat [a b c d e f] the two sit side by side and transpose
+// silently; named, they cannot. A planted swap here leaves every axis-aligned
+// drawing -- which is every drawing in this package's suite -- correct.
 func buildPath(d string, m matrix) (*vector.Path, bool) {
-	return vector.ParseData(d, vector.Affine{m.a, m.b, m.c, m.d, m.e, m.f})
+	return vector.ParseData(d, geometry.Matrix{
+		Xx: m.a, Yx: m.c, X0: m.e,
+		Xy: m.b, Yy: m.d, Y0: m.f,
+	})
 }
