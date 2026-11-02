@@ -106,6 +106,17 @@ func TestOpacityDepthBounded(t *testing.T) {
 	}
 }
 
+// Walk has no surface to composite on, so it says so instead of dropping it.
+func TestWalkReportsOpacity(t *testing.T) {
+	res, err := Walk(opDoc(`<g opacity="0.5"><rect width="5" height="5"/></g>`), Options{Scale: 1}, SinkFunc(func(Shape) {}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Unsupported) != 1 || res.Unsupported[0] != "opacity" {
+		t.Errorf("Unsupported = %v, want [opacity]", res.Unsupported)
+	}
+}
+
 func FuzzRasterizeOpacity(f *testing.F) {
 	f.Add(`<g opacity="0.5"><rect width="5" height="5"/></g>`)
 	f.Add(`<rect opacity="50%" width="5" height="5"/>`)
