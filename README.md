@@ -54,6 +54,22 @@ the allocation it bounds is not a ceiling, it is a comment. `Scale` counts
 towards it, because the surface is the product and only one of the two numbers
 is ours.
 
+## `opacity` is group compositing
+
+`svg.Rasterize` honours the `opacity` attribute on `<g>`, on shapes, on
+`<image>`, on a nested `<svg>` and on the root. Following SVG 1.1 §14.5
+("Object and group opacity") and CSS Color 4, the element is drawn whole into
+an offscreen buffer, which is then blended onto what is beneath **once** — it is
+not a multiplication of each child's `fill-opacity`. Two opaque rects in
+`<g opacity="0.5">` therefore overlap at alpha 128, not 191. `opacity` is not
+inherited; nested groups multiply.
+
+Each open opacity group is one more surface of `W×H×4` bytes, so the nesting
+that is honoured is capped at 8 levels; a group nested deeper is drawn without
+its own `opacity`. Buffers are recycled, and a document with no `opacity`
+allocates nothing extra. `svg.Walk` has no surface: it reports `"opacity"` among
+the features it could not hand over.
+
 ## One path-data parser, three formats
 
 `vector.ParseData` reads the syntax of SVG's `d` attribute and returns the

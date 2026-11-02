@@ -82,7 +82,7 @@ type WalkResult struct {
 	Width, Height int
 
 	// Unsupported names the features met and not handed to the sink, sorted
-	// and without repeats: "gradient", "clip-path", "image".
+	// and without repeats: "gradient", "clip-path", "image", "opacity".
 	//
 	// ⛔ A caller that must not be quietly wrong checks this is empty and
 	// falls back to [Rasterize] when it is not. It is a list rather than a

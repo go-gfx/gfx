@@ -177,6 +177,75 @@ type renderer struct {
 	// features that walk met and could not hand over.
 	sink        Sink
 	unsupported map[string]bool
+
+	// layers is the stack of open opacity groups, innermost last; spare holds
+	// cleared buffers for reuse.
+	layers []layer
+	spare  []*raster.Image
+}
+
+// maxLayers bounds how many opacity groups may be open at once. Each is a
+// full-size buffer and the nesting depth comes from the document, so it must
+// not be left unbounded: deeper groups are drawn without their own opacity.
+const maxLayers = 8
+
+// layer is one open opacity group: the surface it will be blended onto and the
+// device-pixel box painted into its own buffer.
+type layer struct {
+	under *raster.Image
+	box   image.Rectangle
+}
+
+// beginLayer redirects drawing into a fresh transparent buffer. It reports
+// false, changing nothing, for a walk (which has no surface; the feature is
+// noted instead) or past maxLayers.
+func (r *renderer) beginLayer() bool {
+	if r.sink != nil {
+		r.note("opacity")
+		return false
+	}
+	if len(r.layers) >= maxLayers {
+		return false
+	}
+	var buf *raster.Image
+	if n := len(r.spare); n > 0 {
+		buf, r.spare = r.spare[n-1], r.spare[:n-1]
+	} else {
+		buf = raster.New(r.img.W, r.img.H)
+	}
+	r.layers = append(r.layers, layer{under: r.img})
+	r.img = buf
+	return true
+}
+
+// endLayer blends the open group onto the surface beneath it, once, with
+// opacity op, then clears the painted box and recycles the buffer.
+func (r *renderer) endLayer(op float64) {
+	l := r.layers[len(r.layers)-1]
+	r.layers = r.layers[:len(r.layers)-1]
+	src, dst := r.img, l.under
+	box := l.box.Intersect(src.Bounds())
+	for y := box.Min.Y; y < box.Max.Y; y++ {
+		so := src.PixOffset(box.Min.X, y)
+		do := dst.PixOffset(box.Min.X, y)
+		for x := box.Min.X; x < box.Max.X; x++ {
+			if a := src.Pix[so+3]; a != 0 {
+				sa := uint8(math.Round(float64(a) * op))
+				blendOver(dst.Pix[do:do+4], src.Pix[so], src.Pix[so+1], src.Pix[so+2], sa)
+			}
+			so += 4
+			do += 4
+		}
+		row := src.Pix[src.PixOffset(box.Min.X, y):src.PixOffset(box.Max.X, y)]
+		for i := range row {
+			row[i] = 0
+		}
+	}
+	r.spare = append(r.spare, src)
+	r.img = dst
+	if n := len(r.layers); n > 0 {
+		r.layers[n-1].box = r.layers[n-1].box.Union(box)
+	}
 }
 
 // gradient is one <linearGradient> or <radialGradient>. Coordinates are kept as
@@ -337,6 +406,17 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 		}
 	}
 
+	rootOp := 1.0
+	if v, ok := r.root.attr("opacity"); ok {
+		rootOp = parseOpacity(v, 1)
+	}
+	if rootOp < 1 && r.beginLayer() {
+		for i := range r.root.Children {
+			r.render(&r.root.Children[i], st)
+		}
+		r.endLayer(rootOp)
+		return &Result{Image: r.img, Groups: r.groups}, nil
+	}
 	for i := range r.root.Children {
 		r.render(&r.root.Children[i], st)
 	}
@@ -582,6 +662,17 @@ func (r *renderer) render(n *xnode, parent state) {
 		st.groups = ng
 	}
 
+	// opacity is not inherited and is not a per-child multiplier: the element
+	// is rendered whole into its own buffer, which is then blended once (SVG
+	// 1.1 §14.5).
+	if v, ok := n.attr("opacity"); ok {
+		if op := parseOpacity(v, 1); op < 1 {
+			if r.beginLayer() {
+				defer r.endLayer(op)
+			}
+		}
+	}
+
 	switch n.XMLName.Local {
 	// ⛔ The shape elements are named HERE and again in shapePath, and both
 	// lists must agree. A name present in one and missing from the other is
@@ -646,6 +737,9 @@ func (r *renderer) nestedTransform(n *xnode, st state) matrix {
 // addBounds unions a device-space rectangle into every enclosing <g> group's
 // bounding box.
 func (r *renderer) addBounds(st state, rect image.Rectangle) {
+	if n := len(r.layers); n > 0 {
+		r.layers[n-1].box = r.layers[n-1].box.Union(rect)
+	}
 	for _, gi := range st.groups {
 		r.groups[gi].Bounds = r.groups[gi].Bounds.Union(rect)
 	}
