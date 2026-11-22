@@ -63,11 +63,11 @@ transparent cases are compared against `ResizePremultiplied`.
   accumulation is not vectorised). Making Box tile across cores and vectorise
   its running sum is the obvious next step; it is reported as a loss until then.
 
-The SIMD coverage the fleet documents: **amd64 SSE2**, **arm64 NEON**, **s390x
-z/vector** ship the axpy kernel (`asmgen/`), validated bit-for-bit against the
-scalar oracle in `resample_test.go`; **loong64 / ppc64le / riscv64** keep the
-scalar inner loop plus multicore tiling. The numbers above are the arm64 (NEON)
-path.
+The vertical pass's axpy is `floats.Axpy` from
+[go-simd/floats](https://github.com/go-simd/floats), the one shared kernel
+(AVX2 FMA on amd64, NEON FMLA on arm64, portable `math.FMA` elsewhere; fused and
+bit-identical on every architecture), validated bit-for-bit against a `math.FMA`
+oracle in `resample_test.go`. The numbers above are the arm64 (NEON) path.
 
 ---
 
