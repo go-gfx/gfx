@@ -55,11 +55,9 @@ jobs:
             echo "::error::coverage ${cov}% < 100%"; exit 1; }
 
   # Run the suite on the six supported 64-bit targets. amd64/arm64 run natively;
-  # the rest run under qemu-user. This is the per-arch SIMD execution gate: it
-  # validates the go-asmgen axpy kernel (amd64 SSE2, arm64 NEON, s390x z/vector)
-  # bit-for-bit against the scalar oracle where it ships, and the scalar +
-  # multicore fallback on loong64/ppc64le/riscv64 — each run logs which path
-  # (HaveSIMD / SIMDName) it exercised.
+  # the rest run under qemu-user. This is the per-arch execution gate: it
+  # validates floats.Axpy (go-simd/floats) bit-for-bit against the math.FMA
+  # oracle on every architecture.
   arch-native:
     name: arch ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
@@ -225,31 +223,3 @@ jobs:
             echo "running ${{ matrix.goarch }} natively"
           fi
           GOARCH=${{ matrix.goarch }} go test $ex ./...
-
-  # Verify the committed go-asmgen output (simd_{amd64,arm64,s390x}.s) is in sync
-  # with its generator: regenerate from gen.go and fail if the working tree
-  # differs, so the SIMD assembly can never silently drift from its source.
-  asmgen-sync:
-    name: asmgen .s in sync
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: '1.27.3'
-      - name: Regenerate SIMD assembly
-        # Each gen.go is build-tag 'ignore' and pulls go-asmgen only at generate
-        # time (via -mod=mod), so the library keeps a zero-dependency go.mod.
-        # go.mod/go.sum are restored afterwards; only the .s is checked.
-        run: |
-          for a in amd64 arm64 s390x; do
-            ( cd resample/asmgen/$a && GOWORK=off GOFLAGS=-mod=mod go run gen.go && mv simd_$a.s ../../ )
-          done
-          git checkout -- go.mod
-          rm -f go.sum
-      - name: Fail if generated .s drifted
-        run: |
-          if ! git diff --exit-code -- resample/'*.s'; then
-            echo "::error::committed SIMD .s is out of sync with gen.go — run the asmgen generators"
-            exit 1
-          fi

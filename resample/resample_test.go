@@ -458,12 +458,9 @@ func TestParallelHelpers(t *testing.T) {
 	}
 }
 
-// TestAxpyMatchesScalar validates the per-arch axpy dispatch against the scalar
-// oracle (bit-identical on FMA-baseline targets; a tight tolerance covers a
-// GOAMD64=v3 build whose oracle itself fuses), logs which SIMD path this arch
-// ran, and covers the empty-slice guard.
+// TestAxpyMatchesScalar validates axpy (floats.Axpy) against the math.FMA
+// oracle, bit for bit on every architecture, and covers the empty-slice case.
 func TestAxpyMatchesScalar(t *testing.T) {
-	t.Logf("HaveSIMD=%v SIMDName=%s", HaveSIMD, SIMDName)
 	rng := rand.New(rand.NewSource(5))
 	for _, n := range []int{0, 1, 2, 3, 4, 5, 8, 17, 64} {
 		want := make([]float64, n)
@@ -475,10 +472,12 @@ func TestAxpyMatchesScalar(t *testing.T) {
 			want[i], got[i] = v, v
 		}
 		a := rng.NormFloat64()
-		axpyScalar(want, src, a)
+		for i := range want {
+			want[i] = math.FMA(a, src[i], want[i])
+		}
 		axpy(got, src, a)
 		for i := 0; i < n; i++ {
-			if d := math.Abs(got[i] - want[i]); d > 1e-9*(1+math.Abs(want[i])) {
+			if got[i] != want[i] {
 				t.Fatalf("n=%d i=%d: axpy=%v scalar=%v", n, i, got[i], want[i])
 			}
 		}
