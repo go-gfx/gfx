@@ -54,6 +54,47 @@ the allocation it bounds is not a ceiling, it is a comment. `Scale` counts
 towards it, because the surface is the product and only one of the two numbers
 is ours.
 
+## Untrusted input: every limit an SVG meets
+
+`svg.Rasterize`, `svg.RasterizeMask` and `svg.Walk` accept documents from
+strangers (a server-supplied logo, an upload). Everything the document controls
+has a ceiling, and a document past one is **refused with a `*svg.LimitError`**
+(`errors.Is(err, svg.ErrLimit)`; `.What` names the resource) — never truncated
+and never drawn "as far as it got". A document that is not an SVG at all still
+returns the plain "no parseable `<svg>` root" error, and a shape this subset
+cannot draw is still skipped.
+
+| resource | default | option |
+| --- | --- | --- |
+| surface (`width×height×Scale`), and an embedded `<image>` | 40 000 000 pixels | `MaxPixels` |
+| document text | 8 MiB | `MaxBytes` |
+| XML elements | 100 000 | `MaxElements` |
+| element nesting | 256 | `MaxDepth` |
+| path commands, summed over the document | 1 000 000 | `MaxSegments` |
+| pixel work: every painted box, clip, opacity layer and image counts its area | 64 full surfaces, never under 16 777 216 | `MaxWork` |
+| `<stop>` elements per gradient | 256 | fixed |
+| `stroke-dasharray` entries | 64 | fixed |
+| dashes one stroke is cut into (estimated from its control polygon) | 1 048 576 | fixed |
+| any device-space coordinate or stroke width, in pixels (NaN and ±Inf included) | ±10 000 000 | fixed |
+| cached clip masks | 16 surfaces' worth of bytes | fixed |
+| open opacity groups (deeper ones draw without their own opacity) | 8 | fixed |
+
+Notes for a service that renders strangers' files:
+
+- Set the options to what your own pages need; the defaults suit a large map,
+  not a 24-px icon. `Options{MaxPixels: 1 << 18, MaxBytes: 1 << 20, MaxElements: 5000}`
+  is plenty for a logo.
+- The renderer has no `<use>`, gradient `href`, `<mask>` or nested clip-path
+  resolution, so a **reference cycle is inert**: nothing follows it. The limits
+  above are what keep a document that *does* fit the grammar cheap.
+- `encoding/xml` never expands the entities a DTD declares and never fetches a
+  DTD, so there is no entity bomb; the element and depth counts are taken in a
+  first pass before the tree is built.
+- There is no `context`: bound wall-clock time at the call site as well.
+- `svg/fuzz_test.go` holds `FuzzParse`, with a committed corpus in
+  `svg/testdata/fuzz/FuzzParse`; `limits_test.go` holds the bomb tests, which
+  assert the refusal under a memory limit and a deadline.
+
 ## `opacity` is group compositing
 
 `svg.Rasterize` honours the `opacity` attribute on `<g>`, on shapes, on

@@ -85,6 +85,12 @@ func (r *renderer) buildClip(n *xnode, st state) *clipMask {
 		cst.m = st.m.mul(parseTransform(v))
 	}
 
+	// ⛔ A clip is built per (id, transform), so a document can ask for as many
+	// full-surface accumulators as it has transformed groups. Each is charged
+	// against the work budget, and the cache that keeps them is bounded by
+	// clipMem below. A refused charge ends the render: nothing builds another
+	// mask after it, so at most this one accumulator is allocated past a ceiling.
+	r.charge(int64(r.img.W) * int64(r.img.H))
 	acc := make([]uint8, r.img.W*r.img.H)
 	minX, minY := r.img.W, r.img.H
 	maxX, maxY := 0, 0
@@ -92,6 +98,9 @@ func (r *renderer) buildClip(n *xnode, st state) *clipMask {
 
 	var walk func(k *xnode, s state)
 	walk = func(k *xnode, s state) {
+		if r.err != nil {
+			return // no rasterising once a ceiling is passed
+		}
 		ks := s
 		if v, ok := k.attr("transform"); ok {
 			ks.m = s.m.mul(parseTransform(v))
@@ -114,6 +123,9 @@ func (r *renderer) buildClip(n *xnode, st state) *clipMask {
 			return
 		}
 		painted = true
+		// The charge may refuse this child; the loop below is then one more
+		// pass over at most the surface, and the next child returns at the top.
+		r.charge(int64(w) * int64(h))
 		for y := 0; y < h; y++ {
 			row := (oy + y) * r.img.W
 			for x := 0; x < w; x++ {
@@ -151,6 +163,13 @@ func (r *renderer) buildClip(n *xnode, st state) *clipMask {
 	}
 
 	w, h := maxX-minX, maxY-minY
+	// The finished masks are cached for the whole render: bound what they hold
+	// to sixteen surfaces' worth of bytes.
+	r.clipMem += int64(w) * int64(h)
+	if lim := 16 * int64(r.img.W) * int64(r.img.H); r.clipMem > lim {
+		r.fail("clip mask bytes", 0, lim)
+		return &clipMask{}
+	}
 	out := &clipMask{ox: minX, oy: minY, w: w, h: h, a: make([]uint8, w*h)}
 	for y := 0; y < h; y++ {
 		copy(out.a[y*w:(y+1)*w], acc[(minY+y)*r.img.W+minX:(minY+y)*r.img.W+minX+w])
