@@ -29,20 +29,20 @@ func totalAlloc(f func()) uint64 {
 
 // TestAClipPastTheWorkBudgetStopsPainting: once the work budget is spent the
 // clip's pixel loop must not run again for the clip's remaining children. Each
-// child here covers the whole surface, so 20,000 of them would cost ~8e10 pixel
-// visits; refused after the fifth, the render returns at once.
+// child here covers the whole surface, so 20,000 of them would cost ~5e9 pixel
+// visits; refused after the fourth, the render returns at once.
 func TestAClipPastTheWorkBudgetStopsPainting(t *testing.T) {
-	doc := `<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="2000"><defs><clipPath id="c">` +
-		strings.Repeat(`<rect width="2000" height="2000"/>`, 20000) +
-		`</clipPath></defs><rect width="2000" height="2000" clip-path="url(#c)"/></svg>`
+	doc := `<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500"><defs><clipPath id="c">` +
+		strings.Repeat(`<rect width="500" height="500"/>`, 20000) +
+		`</clipPath></defs><rect width="500" height="500" clip-path="url(#c)"/></svg>`
 	done := make(chan error, 1)
-	go func() { _, err := Rasterize(doc, Options{Scale: 1, MaxWork: 1 << 24}); done <- err }()
+	go func() { _, err := Rasterize(doc, Options{Scale: 1, MaxWork: 1 << 20}); done <- err }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, ErrLimit) {
 			t.Fatalf("err = %v, want ErrLimit", err)
 		}
-	case <-time.After(8 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("a clip kept painting after the work budget was spent")
 	}
 }

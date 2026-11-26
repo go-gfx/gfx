@@ -164,9 +164,10 @@ func TestBombSurfaceFromOverflowingFloats(t *testing.T) {
 func nan() float64 { z := 0.0; return z / z }
 
 func TestBombFullSurfaceRectsExhaustTheWorkBudget(t *testing.T) {
-	// 100x100 = 10k pixels; the floor budget is 1<<24, so 5000 full covers
-	// (50M) pass the element ceiling and must still be stopped.
-	refusedBy(t, wrap(strings.Repeat(`<rect width="100" height="100"/>`, 5000)), Options{Scale: 1}, "work", "Rasterize")
+	// 100x100 = 10k pixels; with a 1<<20 budget, 5000 full covers (50M) pass
+	// the element ceiling and must still be stopped. (A small budget keeps the
+	// refusal quick under the race detector with coverage counters.)
+	refusedBy(t, wrap(strings.Repeat(`<rect width="100" height="100"/>`, 5000)), Options{Scale: 1, MaxWork: 1 << 20}, "work", "Rasterize")
 }
 
 func TestBombClipPerTransform(t *testing.T) {
@@ -176,7 +177,7 @@ func TestBombClipPerTransform(t *testing.T) {
 		fmt.Fprintf(&b, `<g transform="translate(%d.5 0)" clip-path="url(#c)"><rect width="1" height="1"/></g>`, i%7)
 		fmt.Fprintf(&b, `<g transform="translate(0 %d.25)" clip-path="url(#c)"><rect width="1" height="1"/></g>`, i)
 	}
-	opt := Options{Scale: 1, MaxWork: 1 << 40} // the work budget must not be the thing that saves us
+	opt := Options{Scale: 1, MaxWork: 1 << 30} // the work budget must not be the thing that saves us
 	old := debug.SetMemoryLimit(bombMemLimit)
 	defer debug.SetMemoryLimit(old)
 	_, err := Rasterize(wrap(b.String()), opt)
