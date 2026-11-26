@@ -27,6 +27,17 @@ jobs:
             exit 1
           fi
 
+  # Known vulnerabilities in the standard library and the dependencies this
+  # module actually calls (the svg package parses documents from strangers).
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
   # Build, vet, race-test, and enforce 100% statement coverage on three OSes.
   test:
     name: test (${{ matrix.os }})

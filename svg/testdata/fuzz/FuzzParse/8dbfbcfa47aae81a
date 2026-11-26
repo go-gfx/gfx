@@ -1,0 +1,3 @@
+go test fuzz v1
+string("<svg viewBox=\"0 0 1 1\"><g><g><path d=\"M0  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0A0000A\"/><g><path d=\"M0 0 0 0 0 0A00000A\"/><path d=\"M0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0A0000A\"/></g></g></g></svg>")
+byte('\x00')

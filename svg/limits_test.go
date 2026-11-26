@@ -294,3 +294,39 @@ func TestDefaultsAdmitRealisticDocuments(t *testing.T) {
 	}
 	accepted(t, wrap(b.String()), Options{Scale: 1})
 }
+
+// The work budget is spent in three places inside a clip, and a render that
+// runs out of it must say so wherever it ran out.
+func TestWorkBudgetExhaustedInsideAClip(t *testing.T) {
+	clip := func(body string) string {
+		return wrap(`<defs><clipPath id="c">` + body + `</clipPath></defs><rect width="9" height="9" clip-path="url(#c)"/>`)
+	}
+	two := `<rect width="50" height="50"/><rect width="50" height="50"/>`
+	for name, c := range map[string]struct {
+		doc  string
+		work int
+	}{
+		"accumulator":  {clip(two), 10},          // 100x100 = 10000 > 10 at the allocation
+		"first shape":  {clip(two), 10_000 + 10}, // the accumulator fits, the first fill does not
+		"second shape": {clip(`<g>` + two + `</g>`), 10_000 + 2500 + 10},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Rasterize(c.doc, Options{Scale: 1, MaxWork: c.work})
+			if !errors.Is(err, ErrLimit) {
+				t.Fatalf("err = %v, want ErrLimit", err)
+			}
+		})
+	}
+}
+
+func TestWorkBudgetExhaustedUnderRootOpacity(t *testing.T) {
+	doc := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" opacity="0.5"><rect width="9" height="9"/></svg>`
+	if _, err := Rasterize(doc, Options{Scale: 1, MaxWork: 1}); !errors.Is(err, ErrLimit) {
+		t.Fatalf("err = %v, want ErrLimit", err)
+	}
+}
+
+// A collapsed transform draws nothing, and is not a dash bomb.
+func TestADashedStrokeUnderACollapsedTransform(t *testing.T) {
+	accepted(t, wrap(`<g transform="scale(0)"><path d="M0 0L99 99" stroke="black" stroke-dasharray="1e-9"/></g>`), Options{Scale: 1})
+}

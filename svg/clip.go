@@ -87,10 +87,10 @@ func (r *renderer) buildClip(n *xnode, st state) *clipMask {
 
 	// ⛔ A clip is built per (id, transform), so a document can ask for as many
 	// full-surface accumulators as it has transformed groups. Each is charged
-	// against the work budget BEFORE it is allocated.
-	if r.charge(int64(r.img.W) * int64(r.img.H)); r.err != nil {
-		return &clipMask{}
-	}
+	// against the work budget, and the cache that keeps them is bounded by
+	// clipMem below. A refused charge ends the render: nothing builds another
+	// mask after it, so at most this one accumulator is allocated past a ceiling.
+	r.charge(int64(r.img.W) * int64(r.img.H))
 	acc := make([]uint8, r.img.W*r.img.H)
 	minX, minY := r.img.W, r.img.H
 	maxX, maxY := 0, 0
@@ -99,7 +99,7 @@ func (r *renderer) buildClip(n *xnode, st state) *clipMask {
 	var walk func(k *xnode, s state)
 	walk = func(k *xnode, s state) {
 		if r.err != nil {
-			return
+			return // no rasterising once a ceiling is passed
 		}
 		ks := s
 		if v, ok := k.attr("transform"); ok {
@@ -123,10 +123,9 @@ func (r *renderer) buildClip(n *xnode, st state) *clipMask {
 			return
 		}
 		painted = true
+		// The charge may refuse this child; the loop below is then one more
+		// pass over at most the surface, and the next child returns at the top.
 		r.charge(int64(w) * int64(h))
-		if r.err != nil {
-			return
-		}
 		for y := 0; y < h; y++ {
 			row := (oy + y) * r.img.W
 			for x := 0; x < w; x++ {

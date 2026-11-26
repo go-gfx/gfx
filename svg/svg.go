@@ -314,9 +314,6 @@ func (r *renderer) collectDefs(n *xnode) {
 		}
 	}
 	for i := range n.Children {
-		if r.err != nil {
-			return
-		}
 		r.collectDefs(&n.Children[i])
 	}
 }
@@ -835,15 +832,15 @@ func (r *renderer) strokeOK(p *vector.Path, st state) bool {
 		r.fail("stroke width", 0, maxCoord)
 		return false
 	}
-	if len(st.dash) == 0 {
-		return true
-	}
 	period := 0.0
 	for _, d := range st.dash {
 		period += d * scale
 	}
 	if len(st.dash)%2 == 1 {
 		period *= 2
+	}
+	if !(period > 0) {
+		return true // no dashes, or a collapsed transform: nothing to cut
 	}
 	var length, cx, cy float64
 	p.Each(func(op vector.PathOp, pts ...[2]float64) {
@@ -852,9 +849,6 @@ func (r *renderer) strokeOK(p *vector.Path, st state) bool {
 			cx, cy = q[0], q[1]
 		}
 	})
-	if !(period > 0) {
-		return true // a collapsed transform: nothing is drawn
-	}
 	if length/period > maxDashRuns {
 		r.fail("dash runs", 0, maxDashRuns)
 		return false
