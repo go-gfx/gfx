@@ -99,7 +99,7 @@ func TestOpacityBufferRecycled(t *testing.T) {
 
 // Nesting past maxLayers must not allocate without bound and must not panic.
 func TestOpacityDepthBounded(t *testing.T) {
-	n := 500
+	n := 200 // well past maxLayers, inside DefaultMaxDepth
 	body := strings.Repeat(`<g opacity="0.9">`, n) + `<rect width="10" height="10"/>` + strings.Repeat(`</g>`, n)
 	if a := alphaAt(t, body, 5, 5); a == 0 || a == 255 {
 		t.Errorf("alpha %d", a)

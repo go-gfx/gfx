@@ -105,6 +105,9 @@ func Walk(doc string, opt Options, sink Sink) (*WalkResult, error) {
 	for i := range r.root.Children {
 		r.render(&r.root.Children[i], st)
 	}
+	if r.err != nil {
+		return nil, r.err
+	}
 	out := &WalkResult{Width: w, Height: h}
 	for k := range r.unsupported {
 		out.Unsupported = append(out.Unsupported, k)
@@ -133,7 +136,7 @@ func (r *renderer) emit(p *vector.Path, st state) {
 		}
 		sh.Fill = &Solid{Colour: st.fill, Opacity: st.fillOp}
 	}
-	if st.strokeOn && st.strokeW > 0 && st.strokeOp > 0 {
+	if st.strokeOn && st.strokeW > 0 && st.strokeOp > 0 && r.strokeOK(p, st) {
 		if st.strokeRef != "" && r.paintExists(st.strokeRef) {
 			r.note("gradient")
 		}

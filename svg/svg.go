@@ -69,6 +69,22 @@ type Options struct {
 	// of thing people accept from strangers. A service rendering uploads should
 	// set this to what its own pages need rather than inherit the default.
 	MaxPixels int
+
+	// The ceilings below refuse a document with a [*LimitError] (which matches
+	// [ErrLimit]) instead of truncating it. Zero means the default; see the
+	// Default* constants and the package README's "untrusted input" section.
+	//
+	// MaxBytes bounds the document text, MaxElements the XML elements,
+	// MaxDepth their nesting, MaxSegments the path commands summed over every
+	// shape. MaxWork bounds the pixel operations the render performs — each
+	// painted box, clip, opacity layer and image counts its area — and defaults
+	// to 64 full surfaces, never under 1<<24: it is what stops a few thousand
+	// small elements each covering the whole page.
+	MaxBytes    int
+	MaxElements int
+	MaxDepth    int
+	MaxSegments int
+	MaxWork     int
 }
 
 // DefaultMaxPixels is the surface [Rasterize] will produce when no ceiling is
@@ -172,6 +188,12 @@ type renderer struct {
 	clipCache map[clipKey]*clipMask // clips already rasterised
 	maxPixels int                   // the ceiling an embedded <image> may not pass
 
+	lim      limits // resolved ceilings
+	work     int64  // pixel operations charged so far
+	segments int64  // path commands built so far
+	clipMem  int64  // bytes held by cached clip masks
+	err      error  // first ceiling passed; the walk stops once set
+
 	// sink, when set, takes the shapes instead of the surface: the walk is
 	// [Walk] rather than [Rasterize] and img is nil. unsupported collects the
 	// features that walk met and could not hand over.
@@ -207,6 +229,7 @@ func (r *renderer) beginLayer() bool {
 	if len(r.layers) >= maxLayers {
 		return false
 	}
+	r.charge(int64(r.img.W) * int64(r.img.H))
 	var buf *raster.Image
 	if n := len(r.spare); n > 0 {
 		buf, r.spare = r.spare[n-1], r.spare[:n-1]
@@ -225,6 +248,7 @@ func (r *renderer) endLayer(op float64) {
 	r.layers = r.layers[:len(r.layers)-1]
 	src, dst := r.img, l.under
 	box := l.box.Intersect(src.Bounds())
+	r.charge(int64(box.Dx()) * int64(box.Dy()))
 	for y := box.Min.Y; y < box.Max.Y; y++ {
 		so := src.PixOffset(box.Min.X, y)
 		do := dst.PixOffset(box.Min.X, y)
@@ -276,10 +300,23 @@ func (r *renderer) collectDefs(n *xnode) {
 	switch n.XMLName.Local {
 	case "linearGradient", "radialGradient":
 		if id, ok := n.attr("id"); ok && id != "" {
+			stops := 0
+			for i := range n.Children {
+				if n.Children[i].XMLName.Local == "stop" {
+					stops++
+				}
+			}
+			if stops > maxStops {
+				r.fail("gradient stops", int64(stops), maxStops)
+				return
+			}
 			r.grads[id] = parseGradient(n)
 		}
 	}
 	for i := range n.Children {
+		if r.err != nil {
+			return
+		}
 		r.collectDefs(&n.Children[i])
 	}
 }
@@ -415,10 +452,16 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 			r.render(&r.root.Children[i], st)
 		}
 		r.endLayer(rootOp)
+		if r.err != nil {
+			return nil, r.err
+		}
 		return &Result{Image: r.img, Groups: r.groups}, nil
 	}
 	for i := range r.root.Children {
 		r.render(&r.root.Children[i], st)
+	}
+	if r.err != nil {
+		return nil, r.err
 	}
 	return &Result{Image: r.img, Groups: r.groups}, nil
 }
@@ -431,6 +474,9 @@ func Rasterize(doc string, opt Options) (*Result, error) {
 // inheritance and transform must be the same whether it is being drawn or
 // handed to a sink — two copies of this would be two documents.
 func prepare(doc string, opt Options) (*renderer, state, int, int, error) {
+	if err := prescan(doc, opt.limits(0, 0)); err != nil {
+		return nil, state{}, 0, 0, err
+	}
 	var root xnode
 	if err := xml.Unmarshal([]byte(doc), &root); err != nil {
 		return nil, state{}, 0, 0, errNoSVG
@@ -449,9 +495,12 @@ func prepare(doc string, opt Options) (*renderer, state, int, int, error) {
 		return nil, state{}, 0, 0, errNoSVG
 	}
 
-	w := int(math.Round(vbW * scale))
-	h := int(math.Round(vbH * scale))
-	if w <= 0 || h <= 0 {
+	// ⛔ Compared as float64 BEFORE it becomes an int. A document may name any
+	// float — 1e30 included — and converting that is implementation-defined:
+	// arm64 saturates to MaxInt64, amd64 gives MinInt64, and two saturated
+	// values multiplied wrap around to 1, which passes any ceiling.
+	fw, fh := math.Round(vbW*scale), math.Round(vbH*scale)
+	if !(fw > 0 && fh > 0) { // false for NaN as well
 		return nil, state{}, 0, 0, errNoSVG
 	}
 	// ⛔ The surface is four bytes a pixel and its size comes from the
@@ -466,10 +515,11 @@ func prepare(doc string, opt Options) (*renderer, state, int, int, error) {
 	if max <= 0 {
 		max = DefaultMaxPixels
 	}
-	if px := int64(w) * int64(h); px > int64(max) {
-		return nil, state{}, 0, 0, fmt.Errorf("svg: a surface of %dx%d is %d pixels, past the %d allowed",
-			w, h, px, max)
+	if fw*fh > float64(max) {
+		return nil, state{}, 0, 0, &LimitError{What: fmt.Sprintf("pixels (a surface of %.0fx%.0f)", fw, fh),
+			Got: int64(min(fw*fh, math.MaxInt64/2)), Max: int64(max)}
 	}
+	w, h := int(fw), int(fh)
 
 	ink := opt.Ink
 	if ink == (color.RGBA{}) {
@@ -481,10 +531,14 @@ func prepare(doc string, opt Options) (*renderer, state, int, int, error) {
 		ink:       ink,
 		paper:     opt.Paper,
 		maxPixels: max,
+		lim:       opt.limits(w, h),
 	}
 
 	r.grads = map[string]gradient{}
 	r.collectDefs(&r.root)
+	if r.err != nil {
+		return nil, state{}, 0, 0, r.err
+	}
 
 	st := state{
 		// Scale to device pixels AND translate the viewBox minimum to the origin,
@@ -607,6 +661,10 @@ func (r *renderer) applyPaintAttrs(n *xnode, st state) state {
 	}
 	if v, ok := n.attr("stroke-dasharray"); ok {
 		st.dash = parseDashArray(v, st.vpW)
+		if len(st.dash) > maxDashes {
+			r.fail("dasharray entries", int64(len(st.dash)), maxDashes)
+			st.dash = nil
+		}
 	}
 	if v, ok := n.attr("stroke-dashoffset"); ok {
 		st.dashPhase = parseLen(v, st.vpW)
@@ -622,7 +680,7 @@ func (r *renderer) applyPaintAttrs(n *xnode, st state) state {
 }
 
 func (r *renderer) render(n *xnode, parent state) {
-	if notRendered[n.XMLName.Local] {
+	if r.err != nil || notRendered[n.XMLName.Local] {
 		return
 	}
 	st := parent
@@ -766,6 +824,44 @@ func scaleCov(cov []float64, k float64) []float64 {
 	return out
 }
 
+// strokeOK checks what a stroke asks of the stroker, and reports false after
+// recording the ceiling it passed. The width, in device pixels, must be a sane
+// length; and the number of dashes is estimated as the length of the path's
+// control polygon — never shorter than the curve — over the pattern's period,
+// because a dash of 1e-9 along a long path cuts it into billions of pieces.
+func (r *renderer) strokeOK(p *vector.Path, st state) bool {
+	scale := st.m.scale()
+	if !finite(st.strokeW*scale, st.dashPhase*scale) {
+		r.fail("stroke width", 0, maxCoord)
+		return false
+	}
+	if len(st.dash) == 0 {
+		return true
+	}
+	period := 0.0
+	for _, d := range st.dash {
+		period += d * scale
+	}
+	if len(st.dash)%2 == 1 {
+		period *= 2
+	}
+	var length, cx, cy float64
+	p.Each(func(op vector.PathOp, pts ...[2]float64) {
+		for _, q := range pts {
+			length += math.Hypot(q[0]-cx, q[1]-cy)
+			cx, cy = q[0], q[1]
+		}
+	})
+	if !(period > 0) {
+		return true // a collapsed transform: nothing is drawn
+	}
+	if length/period > maxDashRuns {
+		r.fail("dash runs", 0, maxDashRuns)
+		return false
+	}
+	return true
+}
+
 func (r *renderer) fillPath(p *vector.Path, st state) {
 	// A walk takes the outline itself; only a rasterising run needs pixels.
 	if r.sink != nil {
@@ -775,6 +871,7 @@ func (r *renderer) fillPath(p *vector.Path, st state) {
 	var rz vector.Rasterizer
 	if st.paint && st.fillOp > 0 {
 		if cov, ox, oy, w, h, ok := rz.Fill(p, st.fillRule, r.img.W, r.img.H); ok {
+			r.charge(int64(w) * int64(h) * int64(1+len(st.clips)))
 			if applyClips(st.clips, cov, ox, oy, w, h) {
 				vector.Composite(r.img, scaleCov(cov, st.fillOp), ox, oy, w, h,
 					r.paintFor(st, st.fillRef, st.fill, ox, oy, w, h))
@@ -782,7 +879,7 @@ func (r *renderer) fillPath(p *vector.Path, st state) {
 			}
 		}
 	}
-	if !st.strokeOn || st.strokeW <= 0 || st.strokeOp <= 0 {
+	if r.err != nil || !st.strokeOn || st.strokeW <= 0 || st.strokeOp <= 0 || !r.strokeOK(p, st) {
 		return
 	}
 	// A stroke width is a length in user units, so it passes through the
@@ -802,6 +899,7 @@ func (r *renderer) fillPath(p *vector.Path, st state) {
 		}
 	}
 	if cov, ox, oy, w, h, ok := rz.StrokeWith(p, style, r.img.W, r.img.H); ok {
+		r.charge(int64(w) * int64(h) * int64(1+len(st.clips)))
 		if applyClips(st.clips, cov, ox, oy, w, h) {
 			vector.Composite(r.img, scaleCov(cov, st.strokeOp), ox, oy, w, h,
 				r.paintFor(st, st.strokeRef, st.stroke, ox, oy, w, h))
@@ -817,6 +915,37 @@ func (r *renderer) fillPath(p *vector.Path, st state) {
 // with exactly the outline the renderer would otherwise have painted — the two
 // cannot drift apart.
 func (r *renderer) shapePath(n *xnode, st state) (*vector.Path, bool) {
+	p, ok := r.buildShape(n, st)
+	if !ok {
+		return nil, false
+	}
+	// ⛔ Checked here, once, because this is the one place every outline is
+	// made — drawn, clipped or walked. A command count is a document-wide
+	// budget; a coordinate that is NaN, infinite or ten million pixels away is
+	// refused rather than handed to a flattener that subdivides in proportion to
+	// the size of the curve.
+	r.segments += int64(p.Len())
+	if r.segments > r.lim.segments {
+		r.fail("path commands", 0, r.lim.segments)
+		return nil, false
+	}
+	bad := false
+	p.Each(func(_ vector.PathOp, pts ...[2]float64) {
+		for _, q := range pts {
+			if !finite(q[0], q[1]) {
+				bad = true
+			}
+		}
+	})
+	if bad {
+		r.fail("coordinate magnitude", 0, maxCoord)
+		return nil, false
+	}
+	return p, true
+}
+
+// buildShape is the geometry of one shape element, unchecked.
+func (r *renderer) buildShape(n *xnode, st state) (*vector.Path, bool) {
 	switch n.XMLName.Local {
 	case "path":
 		d, ok := n.attr("d")
@@ -998,6 +1127,12 @@ func (r *renderer) drawImage(n *xnode, st state) {
 	if int64(cfg.Width)*int64(cfg.Height) > int64(r.maxPixels) {
 		return
 	}
+	// A decode allocates and touches every source pixel, and each <image> may be
+	// the size of the whole ceiling, so they count against the work budget.
+	r.charge(int64(cfg.Width) * int64(cfg.Height))
+	if r.err != nil {
+		return
+	}
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return
@@ -1027,6 +1162,7 @@ func (r *renderer) drawImage(n *xnode, st state) {
 	if dx1 <= dx0 || dy1 <= dy0 {
 		return
 	}
+	r.charge(int64(dx1-dx0) * int64(dy1-dy0))
 
 	sb := src.Bounds()
 	sw, sh := sb.Dx(), sb.Dy()
