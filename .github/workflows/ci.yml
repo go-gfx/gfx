@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
 
   # Build, vet, race-test, and enforce 100% statement coverage on three OSes.
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
       - run: go version
       - run: go vet ./...
       - run: go build ./...
@@ -82,7 +82,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
       - run: go env GOARCH && go test ./...
 
   arch-qemu:
@@ -188,7 +188,7 @@ jobs:
           # itself. Held at 1.26.4 until 2026-10-05; moved to the new fleet
           # floor 1.27.1 then, with the loong64 lane set aside (issue #70)
           # rather than every lane held back.
-          go-version: '1.27.3'
+          go-version: '1.27.4'
       # ⛔ `qemu-user-static` is a VIRTUAL package on Ubuntu 26.04, which
       # `ubuntu-latest` became on 2026-10-19, and apt refuses to choose between its
       # two providers:
